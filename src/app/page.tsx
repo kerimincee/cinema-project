@@ -1,69 +1,518 @@
-import Image from "next/image";
+"use client";
 
+import { useEffect, useRef, useState, type FormEvent } from "react";
+type Screening = {
+  id: number;
+  movie_title: string;
+  description: string;
+  trailer_url: string;
+  screening_date: string;
+  screening_time: string;
+  total_capacity: number;
+  remaining_capacity: number;
+  is_full: boolean;
+  has_reserved: boolean;
+};
+
+type ScreeningResponse = Screening & {
+  screening?: Screening;
+};
+const trailerUrl =
+  "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
 export default function Home() {
+const [screening, setScreening] = useState<Screening | null>(null);
+const [reserved, setReserved] = useState(false);
+const [apiMessage, setApiMessage] = useState("");
+const [showTrailer, setShowTrailer] = useState(false);
+const [authOpen, setAuthOpen] = useState(false);
+const [authMode, setAuthMode] = useState<"login" | "register">("login");
+const [authName, setAuthName] = useState("");
+const [authEmail, setAuthEmail] = useState("");
+const [authPassword, setAuthPassword] = useState("");
+const [authMessage, setAuthMessage] = useState("");
+const [isLoggedIn, setIsLoggedIn] = useState(false);
+const youtubeId =
+  screening?.trailer_url.match(
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&?/]+)/
+  )?.[1] ?? "";
+
+const trailerEmbedUrl = youtubeId
+  ? `https://www.youtube.com/embed/${youtubeId}?rel=0&playsinline=1`
+  : "";
+  const backgroundTrailerUrl = youtubeId
+  ? `https://www.youtube.com/embed/${youtubeId}?autoplay=1&mute=1&controls=0&start=60&loop=1&playlist=${youtubeId}&playsinline=1&rel=0`
+  : "";
+  const backgroundVideo = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+  async function loadScreening() {
+    try {
+      const response = await fetch("/api/screening");
+
+      if (!response.ok) {
+        throw new Error("Film bilgileri alınamadı.");
+      }
+
+      const data = (await response.json()) as ScreeningResponse;
+      const film = data.screening ?? data;
+
+      setScreening(film);
+      setReserved(film.has_reserved);
+    } catch {
+      setApiMessage("Film bilgileri yüklenemedi.");
+    }
+  }
+
+  void loadScreening();
+}, []);
+useEffect(() => {
+  async function checkLogin() {
+    try {
+      const response = await fetch("/api/auth/me");
+      setIsLoggedIn(response.ok);
+    } catch {
+      setIsLoggedIn(false);
+    }
+  }
+
+  void checkLogin();
+}, []);
+
+  function startBackgroundExcerpt() {
+    if (backgroundVideo.current) {
+      backgroundVideo.current.currentTime = 2;
+      void backgroundVideo.current.play();
+    }
+  }
+
+  function loopBackgroundExcerpt() {
+    const video = backgroundVideo.current;
+
+    if (video && video.currentTime >= 5) {
+      video.currentTime = 2;
+      void video.play();
+    }
+  }
+async function submitAuth(event: FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+  setAuthMessage("");
+
+  const endpoint =
+    authMode === "register" ? "/api/auth/register" : "/api/auth/login";
+
+  const body =
+    authMode === "register"
+      ? { name: authName, email: authEmail, password: authPassword }
+      : { email: authEmail, password: authPassword };
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      setAuthMessage(result.error ?? "İşlem tamamlanamadı.");
+      return;
+    }
+
+    setAuthOpen(false);
+    window.location.reload();
+  } catch {
+    setAuthMessage("Sunucuya bağlanılamadı. Lütfen tekrar deneyin.");
+  }
+}
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <main className="min-h-screen bg-[#090b12] text-white">
+      {/* Üst bölüm: arka planda fragman */}
+      <section className="relative flex min-h-[90vh] items-end overflow-hidden">
+       {backgroundTrailerUrl && (
+  <iframe
+    className="absolute left-1/2 top-1/2 h-[100vh] w-[177.78vh] min-w-full -translate-x-1/2 -translate-y-1/2 scale-110 opacity-40"
+    src={backgroundTrailerUrl}
+    title="Film fragmanı — arka plan"
+    allow="autoplay; encrypted-media; picture-in-picture"
+    tabIndex={-1}
+    aria-hidden="true"
+  />
+)}
+
+        <div className="absolute inset-0 bg-gradient-to-r from-[#090b12] via-[#090b12]/75 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#090b12] via-transparent to-black/30" />
+
+        <header className="absolute left-0 right-0 top-0 z-10 mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
+          <a href="#" className="text-2xl font-black tracking-tight">
+            perde<span className="text-orange-400">.</span>
+          </a>
+
+          <nav className="hidden items-center gap-8 text-sm text-white/75 sm:flex">
+            <a href="#film" className="transition hover:text-white">
+              Film
+            </a>
+            <a href="#gosterim" className="transition hover:text-white">
+              Gösterim bilgisi
+            </a>
+          </nav>
+
+        {isLoggedIn ? (
+  <button
+    type="button"
+    onClick={async () => {
+      await fetch("/api/auth/logout", { method: "POST" });
+      setIsLoggedIn(false);
+      window.location.reload();
+    }}
+    className="rounded-full border border-white/25 px-5 py-2 text-sm transition hover:bg-white hover:text-black"
+  >
+    Çıkış yap
+  </button>
+) : (
+  <button
+    type="button"
+    onClick={() => {
+      setAuthMode("login");
+      setAuthMessage("");
+      setAuthOpen(true);
+    }}
+    className="rounded-full border border-white/25 px-5 py-2 text-sm transition hover:bg-white hover:text-black"
+  >
+    Giriş yap / Kayıt ol
+  </button>
+)}
+        </header>
+
+        <div className="relative z-10 mx-auto w-full max-w-7xl px-6 pb-20 pt-32">
+          <p className="mb-5 text-xs font-semibold uppercase tracking-[0.3em] text-orange-300">
+            Bu haftanın gösterimi
+          </p>
+
+          <p className="mb-4 text-sm text-white/65">
+            Dram <span className="px-2 text-orange-300">•</span> Fantastik
+            <span className="px-2 text-orange-300">•</span> 1 sa 48 dk
+          </p>
+
+          <h1 className="max-w-3xl text-5xl font-semibold leading-[1.05] tracking-tight sm:text-7xl">
+{screening?.movie_title ?? "Film bilgisi yükleniyor..."}
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+
+          <p className="mt-6 max-w-xl text-lg italic text-white/80">
+            Bu gece, başka bir hayat mümkün.
+          </p>
+
+          <p className="mt-5 max-w-2xl leading-7 text-white/65">
+{screening?.description ?? apiMessage}
+          </p>
+
+          <button
+  onClick={() =>
+  document.getElementById("fragman")?.scrollIntoView({ behavior: "smooth" })
+}
+            className="mt-8 inline-flex items-center gap-3 rounded-full border border-white/30 px-5 py-3 text-sm font-medium transition hover:border-orange-300 hover:bg-orange-300/10"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-400 text-black">
+              ▶
+            </span>
+            Fragmanı izle
+          </button>
+        </div>
+
+        <div className="absolute bottom-6 right-8 hidden text-xs uppercase tracking-[0.25em] text-white/45 md:block">
+          Aşağı kaydır
+          <span className="ml-3 text-orange-300">↓</span>
+        </div>
+      </section>
+
+      {/* Alt bölüm: fragman, salon ve film detayları */}
+      <section
+        id="film"
+        className="mx-auto grid max-w-7xl gap-10 px-6 py-20 lg:grid-cols-[1.25fr_0.75fr]"
+      >
+        <div>
+      <div id="fragman"></div>
+
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl shadow-black/40">
+           {trailerEmbedUrl ? (
+  <iframe
+    className="aspect-video w-full"
+    src={trailerEmbedUrl}
+    title="Film fragmanı"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    referrerPolicy="strict-origin-when-cross-origin"
+    allowFullScreen
+  />
+) : (
+  <p className="p-6 text-white/70">Fragman yükleniyor...</p>
+)}
+          </div>
+
+          <p className="mt-3 text-sm text-white/45">
+            Fragman bu sayfanın içinde oynatılır.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+
+        <aside id="gosterim" className="flex flex-col">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.25em] text-orange-300">
+            Gösterim yeri
+          </p>
+
+          <h2 className="text-2xl font-semibold sm:text-3xl">
+            Atatürk Üniversitesi
+            <br />
+            Sinema Salonu
+          </h2>
+
+          <div className="my-6 h-px bg-white/15" />
+
+          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.25em] text-orange-300">
+            Film hakkında
+          </p>
+
+          <p className="leading-7 text-white/65">
+{screening?.description ?? apiMessage}
+          </p>
+
+          <dl className="mt-7 grid grid-cols-2 gap-5 rounded-xl border border-white/10 bg-white/[0.03] p-5">
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-white/40">
+                Tarih
+              </dt>
+            <dd className="mt-2 font-medium">
+  {screening?.screening_date ?? "Yükleniyor..."}
+</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-white/40">
+                Saat
+              </dt>
+              <dd className="mt-2 font-medium">{screening?.screening_time?.slice(0, 5) ?? "Yükleniyor..."}</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-white/40">
+                Süre
+              </dt>
+              <dd className="mt-2 font-medium">1 saat 48 dakika</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wider text-white/40">
+                Kalan yer
+              </dt>
+              <dd className="mt-2 font-medium">
+  {screening
+    ? `${screening.remaining_capacity} / ${screening.total_capacity}`
+    : "Yükleniyor..."}
+</dd>
+            </div>
+          </dl>
+
+         <button
+  onClick={async () => {
+    if (!screening) return;
+
+    const cancelling = reserved;
+    setApiMessage("");
+
+    try {
+      const response = await fetch("/api/reservations", {
+        method: cancelling ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ screening_id: screening.id }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          setAuthMode("login");
+          setAuthMessage(result.error ?? "Lütfen önce giriş yapın.");
+          setAuthOpen(true);
+          return;
+        }
+
+        setApiMessage(result.error ?? "İşlem yapılamadı.");
+        return;
+      }
+
+      if (cancelling) {
+        const refreshResponse = await fetch("/api/screening");
+
+        if (!refreshResponse.ok) {
+          throw new Error("Güncel gösterim bilgisi alınamadı.");
+        }
+
+        const refreshData =
+          (await refreshResponse.json()) as ScreeningResponse;
+        const film = refreshData.screening ?? refreshData;
+
+        setScreening(film);
+        setReserved(false);
+        setApiMessage(result.message ?? "Rezervasyon iptal edildi.");
+        return;
+      }
+
+      setReserved(true);
+      setScreening((current) =>
+        current
+          ? {
+              ...current,
+              remaining_capacity:
+                result.remaining_capacity ?? current.remaining_capacity - 1,
+              active_reservations:
+                result.active_reservations ?? current.active_reservations + 1,
+              is_full: result.is_full ?? false,
+              has_reserved: true,
+            }
+          : current
+      );
+      setApiMessage(result.message ?? "Yeriniz ayrıldı.");
+    } catch {
+      setApiMessage("İşlem sırasında sunucuya bağlanılamadı.");
+    }
+  }}
+  className={`mt-6 w-full rounded-xl px-6 py-4 font-semibold transition ${
+    reserved
+      ? "bg-emerald-700 text-white hover:bg-emerald-600"
+      : "bg-orange-400 text-black hover:bg-orange-300"
+  }`}
+>
+  {reserved ? "Rezervasyonu iptal et" : "Yerimi ayırt"}
+</button>
+
+         {apiMessage && (
+  <p className="mt-3 text-center text-sm text-white/75">
+    {apiMessage}
+  </p>
+)}
+        </aside>
+      </section>
+
+      <footer className="mx-auto flex max-w-7xl flex-col gap-3 border-t border-white/10 px-6 py-7 text-xs text-white/40 sm:flex-row sm:items-center sm:justify-between">
+        <span>© 2026 Perde Sinema Kulübü</span>
+        <span>İyi film, güzel bir akşam.</span>
+        <a href="#" className="hover:text-white">
+          Yukarı dön ↑
+        </a>
+      </footer>
+{authOpen && (
+  <div
+    className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+    onClick={() => setAuthOpen(false)}
+  >
+    <form
+      onSubmit={submitAuth}
+      onClick={(event) => event.stopPropagation()}
+      className="w-full max-w-md rounded-2xl bg-[#11141d] p-6 text-white shadow-xl"
+    >
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="text-2xl font-semibold">
+          {authMode === "register" ? "Hesap oluştur" : "Giriş yap"}
+        </h2>
+        <button
+          type="button"
+          onClick={() => setAuthOpen(false)}
+          className="rounded-full border border-white/20 px-3 py-1"
+          aria-label="Pencereyi kapat"
+        >
+          ✕
+        </button>
+      </div>
+
+      {authMode === "register" && (
+        <label className="mb-4 block text-sm">
+          Ad soyad
+          <input
+            required
+            value={authName}
+            onChange={(event) => setAuthName(event.target.value)}
+            className="mt-2 w-full rounded-lg border border-white/20 bg-black/30 p-3"
+            placeholder="Adınız Soyadınız"
+          />
+        </label>
+      )}
+
+      <label className="mb-4 block text-sm">
+        E-posta
+        <input
+          required
+          type="email"
+          value={authEmail}
+          onChange={(event) => setAuthEmail(event.target.value)}
+          className="mt-2 w-full rounded-lg border border-white/20 bg-black/30 p-3"
+          placeholder="ornek@mail.com"
+        />
+      </label>
+
+      <label className="mb-4 block text-sm">
+        Parola
+        <input
+          required
+          minLength={6}
+          type="password"
+          value={authPassword}
+          onChange={(event) => setAuthPassword(event.target.value)}
+          className="mt-2 w-full rounded-lg border border-white/20 bg-black/30 p-3"
+          placeholder="En az 6 karakter"
+        />
+      </label>
+
+      {authMessage && (
+        <p className="mb-4 text-sm text-orange-300">{authMessage}</p>
+      )}
+
+      <button
+        type="submit"
+        className="w-full rounded-lg bg-orange-400 p-3 font-semibold text-black hover:bg-orange-300"
+      >
+        {authMode === "register" ? "Kayıt ol" : "Giriş yap"}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => {
+          setAuthMode(authMode === "register" ? "login" : "register");
+          setAuthMessage("");
+        }}
+        className="mt-4 w-full text-sm text-white/70 hover:text-white"
+      >
+        {authMode === "register"
+          ? "Zaten hesabım var — giriş yap"
+          : "Hesabın yok mu? Kayıt ol"}
+      </button>
+    </form>
+  </div>
+)}
+      {/* Fragman penceresi */}
+      {showTrailer && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-5"
+          onClick={() => setShowTrailer(false)}
+        >
+          <div
+            className="w-full max-w-4xl"
+            onClick={(event) => event.stopPropagation()}
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+            <div className="mb-3 flex items-center justify-between">
+              <p className="font-medium">Gece Yarısı Kütüphanesi — Fragman</p>
+              <button
+                onClick={() => setShowTrailer(false)}
+                className="rounded-full border border-white/30 px-3 py-1 text-sm hover:bg-white/10"
+                aria-label="Fragman penceresini kapat"
+              >
+                Kapat ✕
+              </button>
+            </div>
+
+            <video
+              className="aspect-video w-full rounded-xl bg-black"
+              src={trailerUrl}
+              controls
+              autoPlay
+              playsInline
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          </div>
         </div>
-      </main>
-    </div>
+      )}
+    </main>
   );
-}
+} 
