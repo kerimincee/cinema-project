@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mysql from 'mysql2/promise';
-import pool, { getScreeningsColumns, normalizeScreeningRow } from '@/lib/db';
+import pool, { ensureCoverImageBlobColumn, normalizeScreeningRow } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 
 interface ParsedScreeningInput {
@@ -9,16 +9,32 @@ interface ParsedScreeningInput {
   movie_title?: string;
   description?: string;
   trailer_url?: string;
-  cover_image_url?: string;
-  cover_imageBuffer?: Buffer;
+  cover_image?: Buffer;
   screening_date?: string;
   screening_time?: string;
   total_capacity?: number;
 }
 
 /**
- * Hem application/json (URL veya Base64) hem de multipart/form-data (Dosya yükleme / BLOB)
- * isteklerini ayrıştırır.
+ * Base64 string veya Data URI (data:image/jpeg;base64,...) verisini binary Buffer (BLOB) nesnesine çevirir.
+ */
+function base64ToBuffer(input: string): Buffer | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('data:')) {
+    const commaIdx = trimmed.indexOf(',');
+    if (commaIdx !== -1) {
+      return Buffer.from(trimmed.slice(commaIdx + 1), 'base64');
+    }
+  }
+  return Buffer.from(trimmed, 'base64');
+}
+
+/**
+ * Admin panelinden gelen isteği ayrıştırır.
+ * Sadece BLOB (binary görsel verisi) destekler:
+ * 1) multipart/form-data içindeki File (cover_image) -> Buffer (BLOB)
+ * 2) application/json içindeki Base64 kodlu görsel verisi (cover_image) -> Buffer (BLOB)
  */
 async function parseAdminScreeningRequest(req: NextRequest): Promise<ParsedScreeningInput> {
   const contentType = req.headers.get('content-type') || '';
@@ -36,22 +52,19 @@ async function parseAdminScreeningRequest(req: NextRequest): Promise<ParsedScree
     if (formData.get('screening_time') !== null) output.screening_time = String(formData.get('screening_time')).trim();
     if (formData.get('total_capacity') !== null) output.total_capacity = Number(formData.get('total_capacity'));
 
-    const coverFile = formData.get('cover_image') || formData.get('cover_image_url');
+    const coverFile = formData.get('cover_image');
     if (coverFile instanceof File && coverFile.size > 0) {
       const arrayBuffer = await coverFile.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      output.cover_imageBuffer = buffer;
-      const mimeType = coverFile.type || 'image/jpeg';
-      output.cover_image_url = `data:${mimeType};base64,${buffer.toString('base64')}`;
+      output.cover_image = Buffer.from(arrayBuffer);
     } else if (typeof coverFile === 'string' && coverFile.trim() !== '') {
-      output.cover_image_url = coverFile.trim();
-      output.cover_imageBuffer = Buffer.from(coverFile.trim(), 'utf-8');
+      const buf = base64ToBuffer(coverFile);
+      if (buf) output.cover_image = buf;
     }
 
     return output;
   }
 
-  // JSON Body
+  // JSON Body (Base64 encoded BLOB)
   const body = await req.json();
   const output: ParsedScreeningInput = {
     id: body.id !== undefined ? Number(body.id) : undefined,
@@ -64,20 +77,11 @@ async function parseAdminScreeningRequest(req: NextRequest): Promise<ParsedScree
     total_capacity: body.total_capacity !== undefined ? Number(body.total_capacity) : undefined,
   };
 
-  const rawImage = body.cover_image_url ?? body.cover_image;
-  if (typeof rawImage === 'string' && rawImage.trim() !== '') {
-    const trimmed = rawImage.trim();
-    output.cover_image_url = trimmed;
-    if (trimmed.startsWith('data:')) {
-      const base64Part = trimmed.split(',')[1];
-      if (base64Part) {
-        output.cover_imageBuffer = Buffer.from(base64Part, 'base64');
-      } else {
-        output.cover_imageBuffer = Buffer.from(trimmed, 'utf-8');
-      }
-    } else {
-      output.cover_imageBuffer = Buffer.from(trimmed, 'utf-8');
-    }
+  if (typeof body.cover_image === 'string' && body.cover_image.trim() !== '') {
+    const buf = base64ToBuffer(body.cover_image);
+    if (buf) output.cover_image = buf;
+  } else if (Array.isArray(body.cover_image)) {
+    output.cover_image = Buffer.from(body.cover_image);
   }
 
   return output;
@@ -103,6 +107,9 @@ async function handleUpsertScreening(req: NextRequest) {
       );
     }
 
+    // Veritabanında cover_image (LONGBLOB) sütununun hazır olduğundan emin ol
+    await ensureCoverImageBlobColumn();
+
     // Mevcut gösterim kaydını kontrol et
     let existingRows: mysql.RowDataPacket[];
     if (input.id) {
@@ -116,26 +123,13 @@ async function handleUpsertScreening(req: NextRequest) {
       );
     }
 
-    const columns = await getScreeningsColumns();
-    const hasUrlCol = columns.has('cover_image_url');
-    const hasBlobCol = columns.has('cover_image');
-
-    // Eğer base64 veri URL'si kaydedilecekse ve cover_image_url VARCHAR(255) ise sığması için LONGTEXT'e genişlet
-    if (hasUrlCol && input.cover_image_url && input.cover_image_url.length > 250) {
-      try {
-        await pool.query('ALTER TABLE screenings MODIFY COLUMN cover_image_url LONGTEXT NOT NULL');
-      } catch {
-        // Yetki veya yapı kısıtı varsa yoksay
-      }
-    }
-
     // Tabloda henüz hiç gösterim yoksa yeni kayıt oluştur (INSERT)
     if (existingRows.length === 0) {
       if (
         !input.movie_title ||
         !input.description ||
         !input.trailer_url ||
-        !input.cover_image_url ||
+        !input.cover_image ||
         !input.screening_date ||
         !input.screening_time ||
         input.total_capacity === undefined ||
@@ -144,42 +138,24 @@ async function handleUpsertScreening(req: NextRequest) {
         return NextResponse.json(
           {
             error:
-              'Yeni film gösterimi oluşturmak için film adı, açıklama, fragman, kapak fotoğrafı, tarih, saat ve pozitif toplam kontenjan bilgileri eksiksiz gönderilmelidir.',
+              'Yeni film gösterimi oluşturmak için film adı, açıklama, fragman, kapak fotoğrafı (cover_image BLOB), tarih, saat ve pozitif toplam kontenjan bilgileri eksiksiz gönderilmelidir.',
           },
           { status: 400 }
         );
       }
 
-      const insertCols = [
-        'movie_title',
-        'description',
-        'trailer_url',
-        'screening_date',
-        'screening_time',
-        'total_capacity',
-      ];
-      const insertVals: unknown[] = [
-        input.movie_title,
-        input.description,
-        input.trailer_url,
-        input.screening_date,
-        input.screening_time,
-        input.total_capacity,
-      ];
-
-      if (hasUrlCol) {
-        insertCols.push('cover_image_url');
-        insertVals.push(input.cover_image_url);
-      }
-      if (hasBlobCol) {
-        insertCols.push('cover_image');
-        insertVals.push(input.cover_imageBuffer ?? Buffer.from(input.cover_image_url, 'utf-8'));
-      }
-
-      const placeholders = insertCols.map(() => '?').join(', ');
       const [insertResult] = await pool.query<mysql.ResultSetHeader>(
-        `INSERT INTO screenings (${insertCols.join(', ')}) VALUES (${placeholders})`,
-        insertVals
+        `INSERT INTO screenings (movie_title, description, trailer_url, cover_image, screening_date, screening_time, total_capacity)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          input.movie_title,
+          input.description,
+          input.trailer_url,
+          input.cover_image,
+          input.screening_date,
+          input.screening_time,
+          input.total_capacity,
+        ]
       );
 
       const [newRows] = await pool.query<mysql.RowDataPacket[]>(
@@ -256,15 +232,9 @@ async function handleUpsertScreening(req: NextRequest) {
       updates.push('total_capacity = ?');
       values.push(input.total_capacity);
     }
-    if (input.cover_image_url !== undefined && input.cover_image_url !== '') {
-      if (hasUrlCol) {
-        updates.push('cover_image_url = ?');
-        values.push(input.cover_image_url);
-      }
-      if (hasBlobCol) {
-        updates.push('cover_image = ?');
-        values.push(input.cover_imageBuffer ?? Buffer.from(input.cover_image_url, 'utf-8'));
-      }
+    if (input.cover_image && input.cover_image.length > 0) {
+      updates.push('cover_image = ?');
+      values.push(input.cover_image);
     }
 
     if (updates.length === 0) {

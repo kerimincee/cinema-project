@@ -16,6 +16,10 @@ const mysqlPool = mysql.createPool({
   connectTimeout: 2000,
 });
 
+// Örnek 1x1 PNG binary verisi (Base64) - yerel yedek veritabanı başlangıç BLOB verisi için
+const DEFAULT_POSTER_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
 // Eğer geliştirici bilgisayarında XAMPP / MySQL açık değilse devreye giren yerel yedek (fallback) veritabanı
 interface LocalDBData {
   users: Array<{
@@ -30,8 +34,7 @@ interface LocalDBData {
     movie_title: string;
     description: string;
     trailer_url: string;
-    cover_image_url: string;
-    cover_image?: string;
+    cover_image: string; // Base64 encoded binary BLOB
     screening_date: string;
     screening_time: string;
     total_capacity: number;
@@ -71,8 +74,7 @@ function loadLocalDB(): LocalDBData {
         movie_title: 'Inception',
         description: 'Bir hırsızın rüyalar üzerinden bilinçaltına sızarak fikir çalma hikayesi.',
         trailer_url: 'https://www.youtube.com/watch?v=YoHD9XEInc0',
-        cover_image_url: 'https://m.media-amazon.com/images/I/81p+xe8cbnL._AC_SY679_.jpg',
-        cover_image: 'https://m.media-amazon.com/images/I/81p+xe8cbnL._AC_SY679_.jpg',
+        cover_image: DEFAULT_POSTER_BASE64,
         screening_date: '2026-10-25',
         screening_time: '20:30:00',
         total_capacity: 50,
@@ -107,7 +109,6 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
         { Field: 'movie_title' },
         { Field: 'description' },
         { Field: 'trailer_url' },
-        { Field: 'cover_image_url' },
         { Field: 'cover_image' },
         { Field: 'screening_date' },
         { Field: 'screening_time' },
@@ -154,14 +155,23 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
   // SCREENINGS: SELECT by id
   if (upperSql.includes('FROM SCREENINGS WHERE ID = ?')) {
     const id = Number(params[0]);
-    const rows = db.screenings.filter((s) => s.id === id);
+    const rows = db.screenings
+      .filter((s) => s.id === id)
+      .map((s) => ({
+        ...s,
+        cover_image: Buffer.from(s.cover_image || DEFAULT_POSTER_BASE64, 'base64'),
+      }));
     return [rows, []];
   }
 
   // SCREENINGS: SELECT latest
   if (upperSql.includes('FROM SCREENINGS ORDER BY ID DESC LIMIT 1')) {
     const sorted = [...db.screenings].sort((a, b) => b.id - a.id);
-    return [sorted.slice(0, 1), []];
+    const rows = sorted.slice(0, 1).map((s) => ({
+      ...s,
+      cover_image: Buffer.from(s.cover_image || DEFAULT_POSTER_BASE64, 'base64'),
+    }));
+    return [rows, []];
   }
 
   // SCREENINGS: INSERT
@@ -172,7 +182,7 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
     const newRow: Record<string, unknown> = { id: nextId };
     cols.forEach((col, idx) => {
       const val = params[idx];
-      newRow[col] = Buffer.isBuffer(val) ? val.toString('utf-8') : val;
+      newRow[col] = Buffer.isBuffer(val) ? val.toString('base64') : val;
     });
     db.screenings.push(newRow as LocalDBData['screenings'][0]);
     saveLocalDB(db);
@@ -192,7 +202,7 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
       assignments.forEach((col, idx) => {
         const val = params[idx];
         (target as Record<string, unknown>)[col] = Buffer.isBuffer(val)
-          ? val.toString('utf-8')
+          ? val.toString('base64')
           : val;
       });
       saveLocalDB(db);
@@ -343,39 +353,70 @@ const pool = {
 export default pool;
 
 /**
- * screenings tablosundaki mevcut sütunları kontrol eder.
- * Hem cover_image_url (VARCHAR) hem de cover_image (LONGBLOB/TEXT) sütunlarını destekler.
+ * DATABASE.md'de belirtildiği gibi screenings tablosunda cover_image (LONGBLOB) sütununun
+ * bulunduğundan emin olur. Eğer eski SQL dosyasından kalan cover_image_url varsa onu cover_image LONGBLOB'a dönüştürür.
  */
-export async function getScreeningsColumns(
-  connection?: Pick<mysql.PoolConnection, 'query'>
-): Promise<Set<string>> {
-  const executor = connection || pool;
-  const [rows] = await executor.query<mysql.RowDataPacket[]>(
-    `SHOW COLUMNS FROM screenings`
-  );
-  return new Set(rows.map((r) => r.Field as string));
+export async function ensureCoverImageBlobColumn(): Promise<void> {
+  try {
+    const [rows] = await pool.query<mysql.RowDataPacket[]>('SHOW COLUMNS FROM screenings');
+    const cols = new Set(rows.map((r) => r.Field as string));
+
+    if (!cols.has('cover_image') && cols.has('cover_image_url')) {
+      await pool.query(
+        'ALTER TABLE screenings CHANGE COLUMN cover_image_url cover_image LONGBLOB NOT NULL'
+      );
+    } else if (!cols.has('cover_image')) {
+      await pool.query('ALTER TABLE screenings ADD COLUMN cover_image LONGBLOB NOT NULL');
+    }
+  } catch {
+    // Yetki veya tablo hatası varsa yoksay
+  }
 }
 
 /**
- * Veritabanından gelen screening satırını hem cover_image_url hem de cover_image
- * alanlarını içerecek şekilde normalize eder.
+ * Binary BLOB verisinin MIME türünü (image/png, image/jpeg, image/webp, image/gif) tespit eder.
+ */
+export function detectImageMimeType(buf: Buffer): string {
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return 'image/png';
+  }
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (buf.length >= 4 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) {
+    return 'image/gif';
+  }
+  if (
+    buf.length >= 12 &&
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46 &&
+    buf[8] === 0x57 &&
+    buf[9] === 0x45 &&
+    buf[10] === 0x42 &&
+    buf[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return 'image/jpeg';
+}
+
+/**
+ * Veritabanından gelen screening satırındaki BLOB (cover_image) verisini
+ * frontend'de doğrudan görüntülenebilecek Base64 Data URI formatına dönüştürür.
  */
 export function normalizeScreeningRow(row: Record<string, unknown>, activeReservations = 0) {
-  let imageValue = '';
+  let coverImageBase64 = '';
 
-  if (typeof row.cover_image_url === 'string' && row.cover_image_url.trim() !== '') {
-    imageValue = row.cover_image_url;
-  } else if (row.cover_image) {
-    if (Buffer.isBuffer(row.cover_image)) {
-      const str = row.cover_image.toString('utf-8');
-      if (str.startsWith('http://') || str.startsWith('https://') || str.startsWith('data:') || str.startsWith('/')) {
-        imageValue = str;
-      } else {
-        imageValue = `data:image/jpeg;base64,${row.cover_image.toString('base64')}`;
-      }
-    } else if (typeof row.cover_image === 'string') {
-      imageValue = row.cover_image;
-    }
+  const rawBlob = row.cover_image;
+  if (Buffer.isBuffer(rawBlob) && rawBlob.length > 0) {
+    const mimeType = detectImageMimeType(rawBlob);
+    coverImageBase64 = `data:${mimeType};base64,${rawBlob.toString('base64')}`;
+  } else if (typeof rawBlob === 'string' && rawBlob.trim() !== '') {
+    coverImageBase64 = rawBlob.startsWith('data:')
+      ? rawBlob
+      : `data:image/jpeg;base64,${rawBlob}`;
   }
 
   const totalCapacity = Number(row.total_capacity) || 0;
@@ -387,8 +428,7 @@ export function normalizeScreeningRow(row: Record<string, unknown>, activeReserv
     movie_title: row.movie_title,
     description: row.description,
     trailer_url: row.trailer_url,
-    cover_image_url: imageValue,
-    cover_image: imageValue,
+    cover_image: coverImageBase64,
     screening_date: row.screening_date,
     screening_time: row.screening_time,
     total_capacity: totalCapacity,

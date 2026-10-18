@@ -64,7 +64,7 @@ export async function GET() {
         <!-- 1. Film ve Gösterim Bilgisi -->
         <div class="card">
           <h2><span class="method GET">GET</span> /api/screening — Film & Kontenjan Bilgisi</h2>
-          <p style="font-size:13px;color:#94a3b8;margin:0;">Veritabanındaki aktif filmi, toplam kapasiteyi ve kalan kontenjanı getirir.</p>
+          <p style="font-size:13px;color:#94a3b8;margin:0;">Veritabanındaki aktif filmi, BLOB kapak fotoğrafını (cover_image), toplam kapasiteyi ve kalan kontenjanı getirir.</p>
           <div class="btn-row">
             <button onclick="fetchScreening()">Film Bilgilerini Getir</button>
           </div>
@@ -109,17 +109,17 @@ export async function GET() {
           </div>
         </div>
 
-        <!-- 5. Admin Film Güncelleme -->
+        <!-- 5. Admin Film Güncelleme (BLOB) -->
         <div class="card">
-          <h2><span class="method PATCH">PATCH</span> /api/admin/screening — Admin Film Güncelle</h2>
+          <h2><span class="method PATCH">PATCH</span> /api/admin/screening — Admin Film Güncelle (BLOB)</h2>
           <label>Film Adı</label>
           <input id="admTitle" value="Interstellar" />
           <label>Açıklama</label>
           <input id="admDesc" value="İnsanlığın yıldızlararası yolculuğunu anlatan bilim kurgu klasiği." />
           <label>Fragman Bağlantısı (YouTube)</label>
           <input id="admTrailer" value="https://www.youtube.com/watch?v=zSWdZVtXT7E" />
-          <label>Kapak Fotoğrafı Bağlantısı</label>
-          <input id="admCover" value="https://m.media-amazon.com/images/I/91kFYg4fX3L._AC_SY679_.jpg" />
+          <label>Kapak Fotoğrafı Dosyası (cover_image — BLOB / LONGBLOB)</label>
+          <input id="admCoverFile" type="file" accept="image/*" />
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
             <div>
               <label>Tarih</label>
@@ -265,22 +265,25 @@ export async function GET() {
     }
 
     async function updateScreening() {
-      const body = {
-        movie_title: document.getElementById('admTitle').value,
-        description: document.getElementById('admDesc').value,
-        trailer_url: document.getElementById('admTrailer').value,
-        cover_image_url: document.getElementById('admCover').value,
-        screening_date: document.getElementById('admDate').value,
-        screening_time: document.getElementById('admTime').value,
-        total_capacity: Number(document.getElementById('admCap').value)
-      };
+      const formData = new FormData();
+      formData.append('movie_title', document.getElementById('admTitle').value);
+      formData.append('description', document.getElementById('admDesc').value);
+      formData.append('trailer_url', document.getElementById('admTrailer').value);
+      formData.append('screening_date', document.getElementById('admDate').value);
+      formData.append('screening_time', document.getElementById('admTime').value);
+      formData.append('total_capacity', document.getElementById('admCap').value);
+
+      const fileInput = document.getElementById('admCoverFile');
+      if (fileInput.files && fileInput.files[0]) {
+        formData.append('cover_image', fileInput.files[0]);
+      }
+
       const res = await fetch('/api/admin/screening', {
         method: 'PATCH',
         headers: {
-          'Content-Type': 'application/json',
           ...(currentToken ? { 'Authorization': 'Bearer ' + currentToken } : {})
         },
-        body: JSON.stringify(body)
+        body: formData
       });
       const data = await res.json();
       showResponse('PATCH', '/api/admin/screening', res.status, data);

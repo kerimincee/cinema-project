@@ -121,9 +121,12 @@ Kullanıcı girişini doğrular ve kullanıcının normal kullanıcı (`user`) m
 
 ## 4. Film ve Gösterim Bilgilerini Getirme
 
-Aktif film gösteriminin tüm bilgilerini, toplam kapasitesini, aktif rezervasyon sayısını ve kalan kontenjanı getirir.
+Aktif film gösteriminin tüm bilgilerini, `cover_image` (`BLOB` görsel verisini), toplam kapasitesini, aktif rezervasyon sayısını ve kalan kontenjanı getirir.
 
-> **Görsel Uyumluluğu:** Hem `cover_image_url` hem de `cover_image` alanları aynı anda döndürülür. Veritabanında görsel link (URL) olarak da saklansa, `BLOB` (binary dosya) olarak da saklansa frontend doğrudan `<img src={data.cover_image_url} />` veya `<img src={data.cover_image} />` şeklinde kullanabilir.
+> **Görsel (`cover_image` — `BLOB / LONGBLOB`) Kullanımı:**  
+> Veritabanında `BLOB` olarak saklanan film afişini frontend'de 2 şekilde gösterebilirsiniz:
+> 1. `GET /api/screening` cevabındaki `cover_image` alanını doğrudan `<img src={data.cover_image} />` olarak kullanabilirsiniz (Base64 Data URI formatında döner).
+> 2. Veya doğrudan `<img src="/api/screening/cover" />` adresini çağırabilirsiniz (binary BLOB akışı döner).
 
 - **Adres:** `GET /api/screening` *(veya `GET /screening`)*
 
@@ -134,8 +137,7 @@ Aktif film gösteriminin tüm bilgilerini, toplam kapasitesini, aktif rezervasyo
   "movie_title": "Inception",
   "description": "Bir hırsızın rüyalar üzerinden bilinçaltına sızma hikayesi.",
   "trailer_url": "https://www.youtube.com/watch?v=YoHD9XEInc0",
-  "cover_image_url": "https://ornek.com/inception-poster.jpg",
-  "cover_image": "https://ornek.com/inception-poster.jpg",
+  "cover_image": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
   "screening_date": "2026-10-25",
   "screening_time": "20:30:00",
   "total_capacity": 50,
@@ -148,8 +150,7 @@ Aktif film gösteriminin tüm bilgilerini, toplam kapasitesini, aktif rezervasyo
     "movie_title": "Inception",
     "description": "Bir hırsızın rüyalar üzerinden bilinçaltına sızma hikayesi.",
     "trailer_url": "https://www.youtube.com/watch?v=YoHD9XEInc0",
-    "cover_image_url": "https://ornek.com/inception-poster.jpg",
-    "cover_image": "https://ornek.com/inception-poster.jpg",
+    "cover_image": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
     "screening_date": "2026-10-25",
     "screening_time": "20:30:00",
     "total_capacity": 50,
@@ -164,6 +165,7 @@ Aktif film gösteriminin tüm bilgilerini, toplam kapasitesini, aktif rezervasyo
 ### Alan Açıklamaları
 | Alan | Tür | Açıklama |
 | :--- | :--- | :--- |
+| `cover_image` | `string` | Veritabanındaki `BLOB` görsel verisinin `<img src={...} />` içinde kullanıma hazır Base64 hali |
 | `total_capacity` | `number` | Salonun toplam kapasitesi |
 | `active_reservations` | `number` | Şu ana kadar yapılan aktif rezervasyon sayısı |
 | `remaining_capacity` | `number` | Kalan boş kontenjan (`total_capacity - active_reservations`) |
@@ -215,32 +217,45 @@ Giriş yapmış kullanıcının aktif gösterim için 1 kişilik yer ayırtması
 
 ---
 
-## 6. Admin Paneli — Film ve Gösterim Bilgilerini Güncelleme / Kaydetme
+## 6. Admin Paneli — Film ve Gösterim Bilgilerini Güncelleme / Kaydetme (`BLOB` Destekli)
 
 Sadece **`admin`** rolüne sahip kullanıcılar bu adresi kullanabilir. Normal kullanıcılar (`user`) istek gönderirse `403 Forbidden` hatası döner.
 - Veritabanında henüz bir gösterim yoksa yeni gösterim oluşturur, varsa mevcut gösterimi günceller.
 - **Kapasite Kuralı:** Admin, mevcut aktif rezervasyon sayısından daha düşük bir `total_capacity` belirleyemez.
-- **Görsel Desteği:** Hem JSON içinde link/Base64 (`cover_image_url` veya `cover_image`) hem de `multipart/form-data` ile doğrudan dosya yükleme (`BLOB`) desteklenir.
+- **Görsel (`cover_image` — `BLOB / LONGBLOB`):** Görsel veritabanında doğrudan `BLOB` olarak saklanır. Hem `multipart/form-data` (dosya yükleme) hem de JSON içinde Base64 kodlu binary veri olarak gönderilebilir.
 
 - **Adres:** `PATCH /api/admin/screening` *(Ayrıca `POST` ve `PUT` metotlarını ve `/admin/screening` adresini de destekler)*
 
-### Seçenek A: JSON İle Gönderim (`application/json`)
-*(Sadece değiştirmek istediğiniz alanları veya tüm alanları gönderebilirsiniz)*
+### Yöntem 1 (Önerilen): `FormData` (`multipart/form-data`) ile Dosya Yükleme
+Admin panelinde `<input type="file" name="cover_image" accept="image/*" />` kullanılarak doğrudan görsel dosyası gönderilebilir:
+```js
+const formData = new FormData();
+formData.append("movie_title", "Interstellar");
+formData.append("description", "İnsanlığın yeni bir yaşam alanı arayışını konu alan bilim kurgu filmi.");
+formData.append("trailer_url", "https://www.youtube.com/watch?v=zSWdZVtXT7E");
+formData.append("cover_image", fileInput.files[0]); // BLOB olarak veritabanına kaydedilir
+formData.append("screening_date", "2026-11-01");
+formData.append("screening_time", "21:00");
+formData.append("total_capacity", "60");
+
+await fetch("/api/admin/screening", {
+  method: "PATCH",
+  body: formData,
+});
+```
+
+### Yöntem 2: JSON İle Base64 Binary Veri Gönderimi (`application/json`)
 ```json
 {
   "movie_title": "Interstellar",
   "description": "İnsanlığın yeni bir yaşam alanı arayışını konu alan bilim kurgu filmi.",
   "trailer_url": "https://www.youtube.com/watch?v=zSWdZVtXT7E",
-  "cover_image_url": "https://ornek.com/interstellar.jpg",
+  "cover_image": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
   "screening_date": "2026-11-01",
   "screening_time": "21:00",
   "total_capacity": 60
 }
 ```
-*(Not: Görsel alanı için `"cover_image_url"` veya `"cover_image"` isimlerinden istediğinizi kullanabilirsiniz.)*
-
-### Seçenek B: Dosya Yükleme İle Gönderim (`multipart/form-data`)
-Admin panelinde `<input type="file" name="cover_image" />` kullanılırsa `FormData` olarak doğrudan gönderilebilir. Backend dosyayı otomatik olarak okuyup veritabanına kaydeder.
 
 ### Başarılı Cevap (`200 OK` / `201 Created`)
 ```json
@@ -250,8 +265,7 @@ Admin panelinde `<input type="file" name="cover_image" />` kullanılırsa `FormD
   "movie_title": "Interstellar",
   "description": "İnsanlığın yeni bir yaşam alanı arayışını konu alan bilim kurgu filmi.",
   "trailer_url": "https://www.youtube.com/watch?v=zSWdZVtXT7E",
-  "cover_image_url": "https://ornek.com/interstellar.jpg",
-  "cover_image": "https://ornek.com/interstellar.jpg",
+  "cover_image": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
   "screening_date": "2026-11-01",
   "screening_time": "21:00:00",
   "total_capacity": 60,
