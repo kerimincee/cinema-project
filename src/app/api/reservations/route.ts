@@ -3,15 +3,14 @@ import mysql from 'mysql2/promise';
 import pool from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 
+
 /**
  * GET /api/reservations
  * Giriş yapmış kullanıcının kendi rezervasyonlarını (admin ise tüm rezervasyonları) listeler.
  */
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const queryUserId = searchParams.get('user_id');
-    const user = await getAuthenticatedUser(req, queryUserId ?? undefined);
+    const user = await getAuthenticatedUser(req);
 
     if (!user) {
       return NextResponse.json(
@@ -19,6 +18,8 @@ export async function GET(req: NextRequest) {
         { status: 401 }
       );
     }
+
+    const { searchParams } = new URL(req.url);
 
     if (user.role === 'admin' && searchParams.get('all') === 'true') {
       const [rows] = await pool.query<mysql.RowDataPacket[]>(
@@ -63,19 +64,19 @@ export async function POST(req: NextRequest) {
   let connection: mysql.PoolConnection | null = null;
 
   try {
-    let body: Record<string, unknown> = {};
-    try {
-      body = await req.json();
-    } catch {
-      body = {};
-    }
-
-    const user = await getAuthenticatedUser(req, body.user_id as number | string | undefined);
+    const user = await getAuthenticatedUser(req);
     if (!user) {
       return NextResponse.json(
         { error: 'Yer ayırtmak için lütfen önce giriş yapın.' },
         { status: 401 }
       );
+    }
+
+    let body: Record<string, unknown> = {};
+    try {
+      body = await req.json();
+    } catch {
+      body = {};
     }
 
     connection = await pool.getConnection();
@@ -192,9 +193,18 @@ export async function POST(req: NextRequest) {
 /**
  * DELETE /api/reservations
  * Kullanıcının aktif rezervasyonunu iptal etmesini sağlar (status = 'cancelled').
+ * Güvenlik: Tüm rezervasyonların kazara silinmesini önlemek için reservation_id veya screening_id zorunludur.
  */
 export async function DELETE(req: NextRequest) {
   try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Rezervasyon iptali için giriş yapmalısınız.' },
+        { status: 401 }
+      );
+    }
+
     let body: Record<string, unknown> = {};
     try {
       body = await req.json();
@@ -206,11 +216,10 @@ export async function DELETE(req: NextRequest) {
     const reservationId = body.reservation_id ?? searchParams.get('id');
     const screeningId = body.screening_id ?? searchParams.get('screening_id');
 
-    const user = await getAuthenticatedUser(req, body.user_id as number | string | undefined);
-    if (!user) {
+    if (!reservationId && !screeningId) {
       return NextResponse.json(
-        { error: 'Rezervasyon iptali için giriş yapmalısınız.' },
-        { status: 401 }
+        { error: 'İptal edilecek rezervasyon numarası (id) veya gösterim numarası (screening_id) belirtilmelidir.' },
+        { status: 400 }
       );
     }
 
@@ -220,15 +229,10 @@ export async function DELETE(req: NextRequest) {
         "UPDATE reservations SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'active'",
         [Number(reservationId), user.id]
       );
-    } else if (screeningId) {
+    } else {
       [result] = await pool.query<mysql.ResultSetHeader>(
         "UPDATE reservations SET status = 'cancelled' WHERE screening_id = ? AND user_id = ? AND status = 'active'",
         [Number(screeningId), user.id]
-      );
-    } else {
-      [result] = await pool.query<mysql.ResultSetHeader>(
-        "UPDATE reservations SET status = 'cancelled' WHERE user_id = ? AND status = 'active'",
-        [user.id]
       );
     }
 

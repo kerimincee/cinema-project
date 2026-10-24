@@ -4,6 +4,8 @@ import mysql from 'mysql2/promise';
 import pool from '@/lib/db';
 import { signToken, AuthUser } from '@/lib/auth';
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -19,9 +21,31 @@ export async function POST(req: NextRequest) {
     const normalizedEmail = String(email).trim().toLowerCase();
     const trimmedName = String(name).trim();
 
-    if (String(password).length < 6) {
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
+      return NextResponse.json(
+        { error: 'Lütfen geçerli bir e-posta adresi girin.' },
+        { status: 400 }
+      );
+    }
+
+    if (trimmedName.length < 2 || trimmedName.length > 100) {
+      return NextResponse.json(
+        { error: 'Ad soyad 2 ile 100 karakter arasında olmalıdır.' },
+        { status: 400 }
+      );
+    }
+
+    const passwordStr = String(password);
+    if (passwordStr.length < 6) {
       return NextResponse.json(
         { error: 'Parola en az 6 karakter olmalıdır.' },
+        { status: 400 }
+      );
+    }
+
+    if (passwordStr.length > 72) {
+      return NextResponse.json(
+        { error: 'Parola en fazla 72 karakter olabilir.' },
         { status: 400 }
       );
     }
@@ -40,7 +64,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Parolayı güvenli biçimde özetle (hash)
-    const passwordHash = await bcrypt.hash(String(password), 10);
+    const passwordHash = await bcrypt.hash(passwordStr, 10);
 
     // Yeni kullanıcıyı kaydet (varsayılan rol: 'user')
     const [result] = await pool.query<mysql.ResultSetHeader>(
@@ -74,6 +98,7 @@ export async function POST(req: NextRequest) {
       path: '/',
       maxAge: 60 * 60 * 24 * 7,
       sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
     });
 
     return response;

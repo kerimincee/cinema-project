@@ -64,7 +64,7 @@ function loadLocalDB(): LocalDBData {
         id: 1,
         name: 'Sistem Yöneticisi (Admin)',
         email: 'admin@cinema.com',
-        password_hash: 'admin123',
+        password_hash: '$2b$10$8LgsGOehaHT5Te/JCT8FDuOnAsFtafr6evpY/5N5LvltC1LqW/DhK',
         role: 'admin',
       },
     ],

@@ -1,8 +1,8 @@
-
 "use client";
-import "./admin.css";
 
+import "./admin.css";
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import Link from "next/link";
 
 type Screening = {
   movie_title: string;
@@ -32,18 +32,6 @@ export default function AdminPage() {
   const [authorized, setAuthorized] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  type Reservation = {
-  id: number;
-  user_id: number;
-  user_name: string;
-  user_email: string;
-  screening_id: number;
-  movie_title: string;
-  screening_date: string;
-  screening_time: string;
-  status: string;
-  created_at: string;
-};
   const [film, setFilm] = useState<Screening>(emptyScreening);
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
@@ -56,27 +44,23 @@ export default function AdminPage() {
         const authResponse = await fetch("/api/auth/me", {
           cache: "no-store",
         });
+
         if (!authResponse.ok) {
-          throw new Error(
-            `Oturum kontrolü başarısız. HTTP: ${authResponse.status}`
-          );
+          throw new Error("Oturum kontrolü başarısız. Lütfen giriş yapın.");
         }
-        
+
         const auth = await authResponse.json();
-        
-        console.log("Admin oturum bilgisi:", auth);
-        
+
         if (auth.user?.role !== "admin") {
-          throw new Error(
-            "Admin yetkisi doğrulanamadı. Lütfen oturumunuzu kontrol edin."
-          );
+          throw new Error("Admin yetkisi doğrulanamadı. Bu sayfaya yalnızca yöneticiler erişebilir.");
         }
+
         setAuthorized(true);
 
         const response = await fetch("/api/screening", {
           cache: "no-store",
         });
-        
+
         if (response.status === 404) {
           // Henüz film yok. Admin paneli boş formla açılabilir.
           setFilm(emptyScreening);
@@ -84,43 +68,36 @@ export default function AdminPage() {
         } else if (!response.ok) {
           throw new Error("Film bilgileri alınamadı.");
         } else {
-        
-        }
+          const result = await response.json();
+          const data = result.screening ?? result;
 
-        const result = await response.json();
-        const data = result.screening ?? result;
+          if (data && data.movie_title) {
+            setFilm({
+              movie_title: data.movie_title ?? "",
+              description: data.description ?? "",
+              trailer_url: data.trailer_url ?? "",
+              cover_image: data.cover_image ?? null,
+              screening_date: (data.screening_date ?? "").slice(0, 10),
+              screening_time: (data.screening_time ?? "20:00").slice(0, 5),
+              total_capacity: Number(data.total_capacity ?? 50),
+              active_reservations: Number(data.active_reservations ?? 0),
+              remaining_capacity: Number(data.remaining_capacity ?? 50),
+            });
 
-        if (data && data.movie_title) {
-          setFilm({
-            movie_title: data.movie_title ?? "",
-            description: data.description ?? "",
-            trailer_url: data.trailer_url ?? "",
-            cover_image: data.cover_image ?? null,
-            screening_date: (data.screening_date ?? "").slice(0, 10),
-            screening_time: (data.screening_time ?? "20:00").slice(0, 5),
-            total_capacity: Number(data.total_capacity ?? 50),
-            active_reservations: Number(data.active_reservations ?? 0),
-            remaining_capacity: Number(data.remaining_capacity ?? 50),
-          });
-
-          setPreview(data.cover_image ?? "");
+            setPreview(data.cover_image ?? "");
+          }
         }
       } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Bir hata oluştu."
-        );
+        setError(err instanceof Error ? err.message : "Bir hata oluştu.");
       } finally {
         setLoading(false);
       }
     }
 
-    initialize();
+    void initialize();
   }, []);
 
-  function updateField(
-    field: keyof Screening,
-    value: string | number
-  ) {
+  function updateField(field: keyof Screening, value: string | number) {
     setFilm((previous) => ({
       ...previous,
       [field]: value,
@@ -129,11 +106,15 @@ export default function AdminPage() {
 
   function handleCover(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      setError("Lütfen geçerli bir görsel seçin.");
+      setError("Lütfen geçerli bir görsel dosyası seçin.");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Afiş görseli en fazla 5 MB olabilir.");
       return;
     }
 
@@ -149,27 +130,38 @@ export default function AdminPage() {
     setMessage("");
     setError("");
 
-    if (!film.movie_title.trim() ||
-    !film.description.trim() ||
-    !film.trailer_url.trim() ||
-    !film.screening_date ||
-    !film.screening_time ||
-    !coverFile) {
-  throw new Error("İlk filmi eklemek için tüm alanları ve afişi doldurmalısınız.");
-}
-
     try {
+      if (!film.movie_title.trim()) {
+        throw new Error("Lütfen film adını girin.");
+      }
+      if (!film.description.trim()) {
+        throw new Error("Lütfen film açıklamasını girin.");
+      }
+      if (!film.trailer_url.trim()) {
+        throw new Error("Lütfen fragman bağlantısını girin.");
+      }
+      if (!film.screening_date) {
+        throw new Error("Lütfen gösterim tarihini seçin.");
+      }
+      if (!film.screening_time) {
+        throw new Error("Lütfen gösterim saatini seçin.");
+      }
+
+      // Eğer sistemde daha önceden yüklenmiş afiş yoksa yeni dosya zorunludur
+      if (!film.cover_image && !coverFile) {
+        throw new Error("İlk filmi eklemek için lütfen bir film afişi seçin.");
+      }
+
       if (film.total_capacity < film.active_reservations) {
         throw new Error(
-          "Toplam kapasite aktif rezervasyon sayısından az olamaz."
+          `Toplam kapasite (${film.total_capacity}), mevcut aktif rezervasyon sayısından (${film.active_reservations}) daha az olamaz.`
         );
       }
 
       const formData = new FormData();
-
-      formData.append("movie_title", film.movie_title);
-      formData.append("description", film.description);
-      formData.append("trailer_url", film.trailer_url);
+      formData.append("movie_title", film.movie_title.trim());
+      formData.append("description", film.description.trim());
+      formData.append("trailer_url", film.trailer_url.trim());
       formData.append("screening_date", film.screening_date);
       formData.append("screening_time", film.screening_time);
       formData.append("total_capacity", String(film.total_capacity));
@@ -179,7 +171,7 @@ export default function AdminPage() {
       }
 
       const response = await fetch("/api/admin/screening", {
-        method: "POST",
+        method: "PATCH",
         body: formData,
       });
 
@@ -189,6 +181,7 @@ export default function AdminPage() {
         throw new Error(result.error ?? "Kaydetme işlemi başarısız.");
       }
 
+      // Güncel verileri çek
       const refreshed = await fetch("/api/screening", {
         cache: "no-store",
       });
@@ -215,9 +208,7 @@ export default function AdminPage() {
       setCoverFile(null);
       setMessage("Film ve gösterim bilgileri başarıyla kaydedildi.");
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Bir hata oluştu."
-      );
+      setError(err instanceof Error ? err.message : "Bir hata oluştu.");
     } finally {
       setSaving(false);
     }
@@ -226,12 +217,28 @@ export default function AdminPage() {
   if (loading) {
     return (
       <main className="admin-loading">
-        Yönetim paneli yükleniyor...
+        <p>Yönetim paneli yükleniyor...</p>
       </main>
     );
   }
 
-  if (!authorized) return null;
+  if (!authorized) {
+    return (
+      <main className="cinema-admin">
+        <div className="admin-container" style={{ textAlign: "center", paddingTop: "80px" }}>
+          <div className="admin-card" style={{ maxWidth: "500px", margin: "0 auto", padding: "40px" }}>
+            <h2 style={{ color: "#f87171", marginBottom: "16px" }}>🔒 Yetkisiz Erişim</h2>
+            <p className="admin-muted" style={{ marginBottom: "24px" }}>
+              {error || "Bu sayfaya yalnızca admin yetkisine sahip kullanıcılar erişebilir."}
+            </p>
+            <Link href="/" className="admin-back">
+              ← Ana Sayfaya Dön
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="cinema-admin">
@@ -241,13 +248,13 @@ export default function AdminPage() {
             <p className="admin-eyebrow">SİNEMA YÖNETİM SİSTEMİ</p>
             <h1>Yönetim Paneli</h1>
             <p className="admin-muted">
-              Film gösterimini ve salon kapasitesini yönetin.
+              Film gösterimini, afişini ve salon kapasitesini yönetin.
             </p>
           </div>
 
-          <a href="/" className="admin-back">
-            Siteye Dön
-          </a>
+          <Link href="/" className="admin-back">
+            ← Siteye Dön
+          </Link>
         </header>
 
         <section className="admin-stats">
@@ -274,7 +281,7 @@ export default function AdminPage() {
           <section className="admin-card">
             <div className="admin-section-title">
               <h2>Film Bilgilerini Düzenle</h2>
-              <p>Değişiklikleri kaydettiğinizde gösterim güncellenir.</p>
+              <p>Değişiklikleri kaydettiğinizde gösterim canlı olarak güncellenir.</p>
             </div>
 
             <form onSubmit={handleSave} className="admin-form">
@@ -283,10 +290,8 @@ export default function AdminPage() {
                 <input
                   required
                   value={film.movie_title}
-                  onChange={(e) =>
-                    updateField("movie_title", e.target.value)
-                  }
-                  placeholder="Örn: Interstellar"
+                  onChange={(e) => updateField("movie_title", e.target.value)}
+                  placeholder="Örn: Interstellar, Inception"
                 />
               </label>
 
@@ -296,32 +301,34 @@ export default function AdminPage() {
                   required
                   rows={5}
                   value={film.description}
-                  onChange={(e) =>
-                    updateField("description", e.target.value)
-                  }
+                  onChange={(e) => updateField("description", e.target.value)}
                   placeholder="Filmin konusunu yazın..."
                 />
               </label>
 
               <label>
-                Fragman Bağlantısı
+                Fragman Bağlantısı (YouTube)
                 <input
+                  required
                   type="url"
                   value={film.trailer_url}
-                  onChange={(e) =>
-                    updateField("trailer_url", e.target.value)
-                  }
+                  onChange={(e) => updateField("trailer_url", e.target.value)}
                   placeholder="https://www.youtube.com/watch?v=..."
                 />
               </label>
 
               <label>
-                Film Kapak Görseli
+                Film Kapak Görseli (Afiş)
                 <input
                   type="file"
                   accept="image/*"
                   onChange={handleCover}
                 />
+                <small style={{ color: "#94a3b8", fontWeight: "normal", marginTop: "4px" }}>
+                  {film.cover_image
+                    ? "Mevcut afiş kayıtlı. Değiştirmek istemiyorsanız boş bırakabilirsiniz."
+                    : "Lütfen bir afiş görseli seçin (Maks. 5 MB)."}
+                </small>
               </label>
 
               <div className="admin-form-row">
@@ -331,9 +338,7 @@ export default function AdminPage() {
                     required
                     type="date"
                     value={film.screening_date}
-                    onChange={(e) =>
-                      updateField("screening_date", e.target.value)
-                    }
+                    onChange={(e) => updateField("screening_date", e.target.value)}
                   />
                 </label>
 
@@ -343,9 +348,7 @@ export default function AdminPage() {
                     required
                     type="time"
                     value={film.screening_time}
-                    onChange={(e) =>
-                      updateField("screening_time", e.target.value)
-                    }
+                    onChange={(e) => updateField("screening_time", e.target.value)}
                   />
                 </label>
               </div>
@@ -358,23 +361,23 @@ export default function AdminPage() {
                   min={Math.max(1, film.active_reservations)}
                   value={film.total_capacity}
                   onChange={(e) =>
-                    updateField(
-                      "total_capacity",
-                      Number(e.target.value)
-                    )
+                    updateField("total_capacity", Number(e.target.value))
                   }
                 />
+                <small style={{ color: "#94a3b8", fontWeight: "normal" }}>
+                  Mevcut aktif rezervasyon ({film.active_reservations}) sayısının altına düşürülemez.
+                </small>
               </label>
 
               {message && (
                 <div className="admin-success" role="status">
-                  {message}
+                  ✓ {message}
                 </div>
               )}
 
               {error && (
                 <div className="admin-error" role="alert">
-                  {error}
+                  ⚠ {error}
                 </div>
               )}
 
@@ -389,9 +392,9 @@ export default function AdminPage() {
           </section>
 
           <aside className="admin-card admin-preview">
-            <h2>Film Önizlemesi</h2>
+            <h2>Canlı Film Önizlemesi</h2>
             <p className="admin-muted">
-              Gösterimde yer alacak film
+              Sitede gösterilecek film kartı
             </p>
 
             {preview ? (
@@ -407,15 +410,23 @@ export default function AdminPage() {
             )}
 
             <h3>{film.movie_title || "Film adı"}</h3>
-            <p className="admin-muted">
-              {film.description || "Film açıklaması"}
+            <p className="admin-muted" style={{ marginTop: "8px", maxHeight: "120px", overflow: "hidden" }}>
+              {film.description || "Film açıklaması burada görünecek..."}
             </p>
 
             <div className="admin-preview-details">
-              <span>Gösterim Tarihi</span>
-              <strong>{film.screening_date || "Belirlenmedi"}</strong>
-              <span>Gösterim Saati</span>
-              <strong>{film.screening_time}</strong>
+              <div>
+                <span>Gösterim Tarihi</span>
+                <strong style={{ display: "block", marginTop: "4px" }}>
+                  {film.screening_date || "Belirlenmedi"}
+                </strong>
+              </div>
+              <div>
+                <span>Gösterim Saati</span>
+                <strong style={{ display: "block", marginTop: "4px" }}>
+                  {film.screening_time || "Belirlenmedi"}
+                </strong>
+              </div>
             </div>
           </aside>
         </div>

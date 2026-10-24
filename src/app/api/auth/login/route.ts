@@ -33,12 +33,12 @@ export async function POST(req: NextRequest) {
     const userRow = rows[0];
     const storedHash = String(userRow.password_hash);
 
-    // Bcrypt hash kontrolü (test amaçlı veritabanına elle girilmiş hashlenmemiş parola varsa onu da yedek olarak kontrol eder)
+    // Güvenlik: Yalnızca geçerli bcrypt hash karşılaştırması kabul edilir
     let isPasswordValid = false;
-    if (storedHash.startsWith('$2a$') || storedHash.startsWith('$2b$') || storedHash.startsWith('$2y$')) {
+    try {
       isPasswordValid = await bcrypt.compare(String(password), storedHash);
-    } else {
-      isPasswordValid = String(password) === storedHash;
+    } catch {
+      isPasswordValid = false;
     }
 
     if (!isPasswordValid) {
@@ -75,6 +75,7 @@ export async function POST(req: NextRequest) {
       path: '/',
       maxAge: 60 * 60 * 24 * 7,
       sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
     });
 
     return response;

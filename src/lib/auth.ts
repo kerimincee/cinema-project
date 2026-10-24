@@ -37,6 +37,7 @@ export function signToken(user: AuthUser): string {
 
 /**
  * Gönderilen JWT token'ı doğrular ve içindeki kullanıcı bilgisini döndürür.
+ * Zamanlama saldırılarını (timing attack) önlemek için sabit zamanlı Buffer karşılaştırması kullanılır.
  */
 export function verifyToken(token: string): AuthUser | null {
   try {
@@ -49,7 +50,12 @@ export function verifyToken(token: string): AuthUser | null {
       .update(`${header}.${payload}`)
       .digest('base64url');
 
-    if (signature !== expectedSignature) return null;
+    const sigBuffer = Buffer.from(signature);
+    const expBuffer = Buffer.from(expectedSignature);
+
+    if (sigBuffer.length !== expBuffer.length || !crypto.timingSafeEqual(sigBuffer, expBuffer)) {
+      return null;
+    }
 
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
     if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) {
@@ -68,13 +74,11 @@ export function verifyToken(token: string): AuthUser | null {
 }
 
 /**
- * İstekten (Authorization Header, Cookie veya Body içindeki user_id) kullanıcıyı tespit eder
+ * İstekten (Authorization Header veya HttpOnly Cookie) kullanıcıyı tespit eder
  * ve veritabanından güncel yetkisini (user / admin) doğrular.
+ * Güvenlik nedeniyle gövde (body) veya özel başlıklardan (x-user-id) yetkilendirme KESİNLİKLE kabul edilmez.
  */
-export async function getAuthenticatedUser(
-  req: NextRequest,
-  bodyUserId?: number | string
-): Promise<AuthUser | null> {
+export async function getAuthenticatedUser(req: NextRequest): Promise<AuthUser | null> {
   let userId: number | null = null;
 
   // 1. Authorization: Bearer <token> kontrolü
@@ -95,15 +99,6 @@ export async function getAuthenticatedUser(
       if (tokenUser) {
         userId = tokenUser.id;
       }
-    }
-  }
-
-  // 3. Header (x-user-id) veya Body (user_id) fallback kontrolü
-  if (!userId) {
-    const headerUserId = req.headers.get('x-user-id');
-    const candidate = bodyUserId ?? headerUserId;
-    if (candidate !== undefined && candidate !== null && !Number.isNaN(Number(candidate))) {
-      userId = Number(candidate);
     }
   }
 
