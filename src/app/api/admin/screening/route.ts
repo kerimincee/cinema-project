@@ -3,9 +3,10 @@ import mysql from 'mysql2/promise';
 import pool, { ensureCoverImageBlobColumn, normalizeScreeningRow } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5 MB
+
 interface ParsedScreeningInput {
   id?: number;
-  user_id?: number | string;
   movie_title?: string;
   description?: string;
   trailer_url?: string;
@@ -44,7 +45,6 @@ async function parseAdminScreeningRequest(req: NextRequest): Promise<ParsedScree
     const output: ParsedScreeningInput = {};
 
     if (formData.get('id')) output.id = Number(formData.get('id'));
-    if (formData.get('user_id')) output.user_id = String(formData.get('user_id'));
     if (formData.get('movie_title') !== null) output.movie_title = String(formData.get('movie_title')).trim();
     if (formData.get('description') !== null) output.description = String(formData.get('description')).trim();
     if (formData.get('trailer_url') !== null) output.trailer_url = String(formData.get('trailer_url')).trim();
@@ -54,11 +54,19 @@ async function parseAdminScreeningRequest(req: NextRequest): Promise<ParsedScree
 
     const coverFile = formData.get('cover_image');
     if (coverFile instanceof File && coverFile.size > 0) {
+      if (coverFile.size > MAX_IMAGE_SIZE) {
+        throw new Error('Kapak fotoğrafı en fazla 5 MB olabilir.');
+      }
       const arrayBuffer = await coverFile.arrayBuffer();
       output.cover_image = Buffer.from(arrayBuffer);
     } else if (typeof coverFile === 'string' && coverFile.trim() !== '') {
       const buf = base64ToBuffer(coverFile);
-      if (buf) output.cover_image = buf;
+      if (buf) {
+        if (buf.length > MAX_IMAGE_SIZE) {
+          throw new Error('Kapak fotoğrafı en fazla 5 MB olabilir.');
+        }
+        output.cover_image = buf;
+      }
     }
 
     return output;
@@ -68,7 +76,6 @@ async function parseAdminScreeningRequest(req: NextRequest): Promise<ParsedScree
   const body = await req.json();
   const output: ParsedScreeningInput = {
     id: body.id !== undefined ? Number(body.id) : undefined,
-    user_id: body.user_id,
     movie_title: body.movie_title !== undefined ? String(body.movie_title).trim() : undefined,
     description: body.description !== undefined ? String(body.description).trim() : undefined,
     trailer_url: body.trailer_url !== undefined ? String(body.trailer_url).trim() : undefined,
@@ -79,9 +86,18 @@ async function parseAdminScreeningRequest(req: NextRequest): Promise<ParsedScree
 
   if (typeof body.cover_image === 'string' && body.cover_image.trim() !== '') {
     const buf = base64ToBuffer(body.cover_image);
-    if (buf) output.cover_image = buf;
+    if (buf) {
+      if (buf.length > MAX_IMAGE_SIZE) {
+        throw new Error('Kapak fotoğrafı en fazla 5 MB olabilir.');
+      }
+      output.cover_image = buf;
+    }
   } else if (Array.isArray(body.cover_image)) {
-    output.cover_image = Buffer.from(body.cover_image);
+    const buf = Buffer.from(body.cover_image);
+    if (buf.length > MAX_IMAGE_SIZE) {
+      throw new Error('Kapak fotoğrafı en fazla 5 MB olabilir.');
+    }
+    output.cover_image = buf;
   }
 
   return output;
@@ -89,10 +105,8 @@ async function parseAdminScreeningRequest(req: NextRequest): Promise<ParsedScree
 
 async function handleUpsertScreening(req: NextRequest) {
   try {
-    const input = await parseAdminScreeningRequest(req);
-
-    // 1. Admin Yetki Kontrolü (Backend tarafında zorunlu kontrol)
-    const user = await getAuthenticatedUser(req, input.user_id);
+    // 1. Admin Yetki Kontrolü (Sadece geçerli Token/Cookie üzerinden)
+    const user = await getAuthenticatedUser(req);
     if (!user) {
       return NextResponse.json(
         { error: 'Bu işlemi gerçekleştirmek için giriş yapmalısınız.' },
@@ -106,6 +120,8 @@ async function handleUpsertScreening(req: NextRequest) {
         { status: 403 }
       );
     }
+
+    const input = await parseAdminScreeningRequest(req);
 
     // Veritabanında cover_image (LONGBLOB) sütununun hazır olduğundan emin ol
     await ensureCoverImageBlobColumn();
@@ -265,10 +281,11 @@ async function handleUpsertScreening(req: NextRequest) {
       },
       { status: 200 }
     );
-  } catch (error) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Film bilgileri güncellenirken bir sunucu hatası oluştu.';
     console.error('Admin Screening API Error:', error);
     return NextResponse.json(
-      { error: 'Film bilgileri güncellenirken bir sunucu hatası oluştu.' },
+      { error: message },
       { status: 500 }
     );
   }

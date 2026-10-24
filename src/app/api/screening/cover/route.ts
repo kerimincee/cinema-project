@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import mysql from 'mysql2/promise';
 import pool, { detectImageMimeType } from '@/lib/db';
 
+
 /**
  * GET /api/screening/cover
  * Veritabanındaki cover_image (BLOB / LONGBLOB) sütununu doğrudan binary görsel olarak döndürür.
@@ -39,7 +40,7 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': mimeType,
-        'Cache-Control': 'no-store',
+        'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
       },
     });
   } catch (error) {

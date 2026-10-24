@@ -3,11 +3,11 @@ import mysql from 'mysql2/promise';
 import pool, { normalizeScreeningRow } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const screeningIdParam = searchParams.get('id');
-    const queryUserId = searchParams.get('user_id');
 
     let screeningRows: mysql.RowDataPacket[];
 
@@ -43,8 +43,8 @@ export async function GET(req: NextRequest) {
     );
     const activeReservations = Number(countRows[0]?.count || 0);
 
-    // Giriş yapmış kullanıcı varsa bu gösterime zaten rezervasyon yapmış mı kontrol et
-    const user = await getAuthenticatedUser(req, queryUserId ?? undefined);
+    // Giriş yapmış kullanıcı varsa bu gösterime zaten rezervasyon yapmış mı kontrol et (Sadece geçerli Token/Cookie ile)
+    const user = await getAuthenticatedUser(req);
     let hasReserved = false;
 
     if (user) {
