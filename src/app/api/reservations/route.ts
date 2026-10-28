@@ -3,7 +3,6 @@ import mysql from 'mysql2/promise';
 import pool from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 
-
 /**
  * GET /api/reservations
  * Giriş yapmış kullanıcının kendi rezervasyonlarını (admin ise tüm rezervasyonları) listeler.
@@ -24,6 +23,7 @@ export async function GET(req: NextRequest) {
     if (user.role === 'admin' && searchParams.get('all') === 'true') {
       const [rows] = await pool.query<mysql.RowDataPacket[]>(
         `SELECT r.id, r.user_id, u.name AS user_name, u.email AS user_email,
+                u.phone AS user_phone, u.student_number AS user_student_number, u.department AS user_department,
                 r.screening_id, s.movie_title, s.screening_date, s.screening_time,
                 r.status, r.created_at
          FROM reservations r
@@ -57,8 +57,6 @@ export async function GET(req: NextRequest) {
 /**
  * POST /api/reservations
  * Kullanıcının yer ayırtma işlemini gerçekleştirir.
- * - Transaction ve satır kilitleme (FOR UPDATE) ile eşzamanlı isteklerde (race condition) kontenjan aşımını engeller.
- * - Aynı kullanıcının aynı gösterime birden fazla aktif rezervasyon yapmasını engeller.
  */
 export async function POST(req: NextRequest) {
   let connection: mysql.PoolConnection | null = null;
@@ -82,7 +80,6 @@ export async function POST(req: NextRequest) {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // Gösterim ID'si gönderilmişse onu, gönderilmemişse son aktif gösterimi kilitleyerek (FOR UPDATE) seç
     const requestedScreeningId = body.screening_id ? Number(body.screening_id) : null;
     let screeningRows: mysql.RowDataPacket[];
 
@@ -192,8 +189,9 @@ export async function POST(req: NextRequest) {
 
 /**
  * DELETE /api/reservations
- * Kullanıcının aktif rezervasyonunu iptal etmesini sağlar (status = 'cancelled').
- * Güvenlik: Tüm rezervasyonların kazara silinmesini önlemek için reservation_id veya screening_id zorunludur.
+ * - Admin: Tüm rezervasyonları sıfırlayabilir (reset=all)
+ * - Admin: Herhangi bir rezervasyonu iptal edebilir (id=...)
+ * - Kullanıcı: Kendi aktif rezervasyonunu iptal edebilir
  */
 export async function DELETE(req: NextRequest) {
   try {
@@ -213,6 +211,29 @@ export async function DELETE(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url);
+    const resetAll =
+      searchParams.get('reset') === 'true' ||
+      searchParams.get('reset') === 'all' ||
+      body.reset === true ||
+      body.reset === 'all';
+
+    // 1. Admin: Tüm rezervasyonları sıfırlama (Reset)
+    if (resetAll) {
+      if (user.role !== 'admin') {
+        return NextResponse.json(
+          { error: 'Tüm rezervasyonları sıfırlama yetkisi yalnızca yöneticilere aittir.' },
+          { status: 403 }
+        );
+      }
+
+      await pool.query('DELETE FROM reservations');
+
+      return NextResponse.json(
+        { message: 'Tüm rezervasyon kayıtları başarıyla sıfırlandı.' },
+        { status: 200 }
+      );
+    }
+
     const reservationId = body.reservation_id ?? searchParams.get('id');
     const screeningId = body.screening_id ?? searchParams.get('screening_id');
 
@@ -224,11 +245,22 @@ export async function DELETE(req: NextRequest) {
     }
 
     let result: mysql.ResultSetHeader;
+
+    // 2. Belirli bir rezervasyonu iptal etme
     if (reservationId) {
-      [result] = await pool.query<mysql.ResultSetHeader>(
-        "UPDATE reservations SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'active'",
-        [Number(reservationId), user.id]
-      );
+      if (user.role === 'admin') {
+        // Admin herhangi bir rezervasyonu iptal edebilir
+        [result] = await pool.query<mysql.ResultSetHeader>(
+          "UPDATE reservations SET status = 'cancelled' WHERE id = ? AND status = 'active'",
+          [Number(reservationId)]
+        );
+      } else {
+        // Normal kullanıcı sadece kendi rezervasyonunu iptal edebilir
+        [result] = await pool.query<mysql.ResultSetHeader>(
+          "UPDATE reservations SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'active'",
+          [Number(reservationId), user.id]
+        );
+      }
     } else {
       [result] = await pool.query<mysql.ResultSetHeader>(
         "UPDATE reservations SET status = 'cancelled' WHERE screening_id = ? AND user_id = ? AND status = 'active'",

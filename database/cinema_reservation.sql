@@ -46,7 +46,7 @@ CREATE TABLE `screenings` (
   `movie_title` varchar(255) NOT NULL,
   `description` text NOT NULL,
   `trailer_url` varchar(255) NOT NULL,
-  `cover_image_url` varchar(255) NOT NULL,
+  `cover_image` longblob NOT NULL,
   `screening_date` date NOT NULL,
   `screening_time` time NOT NULL,
   `total_capacity` int(11) NOT NULL
@@ -62,8 +62,12 @@ CREATE TABLE `users` (
   `id` int(11) NOT NULL,
   `name` varchar(100) NOT NULL,
   `email` varchar(150) NOT NULL,
+  `phone` varchar(20) DEFAULT NULL,
+  `student_number` varchar(50) DEFAULT NULL,
+  `department` varchar(100) DEFAULT NULL,
   `password_hash` varchar(255) NOT NULL,
-  `role` varchar(20) NOT NULL DEFAULT 'user'
+  `role` varchar(20) NOT NULL DEFAULT 'user',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --

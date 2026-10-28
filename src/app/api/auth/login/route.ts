@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import mysql from 'mysql2/promise';
-import pool from '@/lib/db';
+import pool, { ensureUserColumns } from '@/lib/db';
 import { signToken, AuthUser } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
+    await ensureUserColumns();
+
     const body = await req.json();
     const { email, password } = body;
 
@@ -19,7 +21,7 @@ export async function POST(req: NextRequest) {
     const normalizedEmail = String(email).trim().toLowerCase();
 
     const [rows] = await pool.query<mysql.RowDataPacket[]>(
-      'SELECT id, name, email, password_hash, role FROM users WHERE email = ? LIMIT 1',
+      'SELECT id, name, email, phone, student_number, department, password_hash, role FROM users WHERE email = ? LIMIT 1',
       [normalizedEmail]
     );
 
@@ -53,6 +55,9 @@ export async function POST(req: NextRequest) {
       id: Number(userRow.id),
       name: String(userRow.name),
       email: String(userRow.email),
+      phone: userRow.phone ? String(userRow.phone) : '',
+      student_number: userRow.student_number ? String(userRow.student_number) : '',
+      department: userRow.department ? String(userRow.department) : '',
       role,
     };
 

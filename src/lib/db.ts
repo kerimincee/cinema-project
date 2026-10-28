@@ -21,14 +21,20 @@ const DEFAULT_POSTER_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
 // Eğer geliştirici bilgisayarında XAMPP / MySQL açık değilse devreye giren yerel yedek (fallback) veritabanı
+export interface LocalDBUser {
+  id: number;
+  name: string;
+  email: string;
+  phone?: string;
+  student_number?: string;
+  department?: string;
+  password_hash: string;
+  role: string;
+  created_at?: string;
+}
+
 interface LocalDBData {
-  users: Array<{
-    id: number;
-    name: string;
-    email: string;
-    password_hash: string;
-    role: string;
-  }>;
+  users: Array<LocalDBUser>;
   screenings: Array<{
     id: number;
     movie_title: string;
@@ -64,8 +70,12 @@ function loadLocalDB(): LocalDBData {
         id: 1,
         name: 'Sistem Yöneticisi (Admin)',
         email: 'admin@cinema.com',
+        phone: '05550000000',
+        student_number: 'ADM001',
+        department: 'Bilgi İşlem',
         password_hash: '$2b$10$8LgsGOehaHT5Te/JCT8FDuOnAsFtafr6evpY/5N5LvltC1LqW/DhK',
         role: 'admin',
+        created_at: new Date().toISOString(),
       },
     ],
     screenings: [
@@ -118,6 +128,24 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
     ];
   }
 
+  // SHOW COLUMNS FROM users
+  if (upperSql.startsWith('SHOW COLUMNS FROM USERS')) {
+    return [
+      [
+        { Field: 'id' },
+        { Field: 'name' },
+        { Field: 'email' },
+        { Field: 'phone' },
+        { Field: 'student_number' },
+        { Field: 'department' },
+        { Field: 'password_hash' },
+        { Field: 'role' },
+        { Field: 'created_at' },
+      ],
+      [],
+    ];
+  }
+
   // ALTER TABLE
   if (upperSql.startsWith('ALTER TABLE')) {
     return [{ affectedRows: 0 }, []];
@@ -140,14 +168,44 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
   // USERS: INSERT
   if (upperSql.startsWith('INSERT INTO USERS')) {
     const nextId = db.users.reduce((max, u) => Math.max(max, u.id), 0) + 1;
-    const [name, email, password_hash, role] = params;
-    db.users.push({
+    let name = '';
+    let email = '';
+    let phone = '';
+    let student_number = '';
+    let department = '';
+    let password_hash = '';
+    let role = 'user';
+
+    const colMatch = sql.match(/INSERT\s+INTO\s+users\s*\(([^)]+)\)/i);
+    if (colMatch) {
+      const cols = colMatch[1].split(',').map((c) => c.trim().toLowerCase());
+      cols.forEach((col, idx) => {
+        const val = params[idx];
+        if (col === 'name') name = String(val ?? '');
+        else if (col === 'email') email = String(val ?? '');
+        else if (col === 'phone') phone = String(val ?? '');
+        else if (col === 'student_number') student_number = String(val ?? '');
+        else if (col === 'department') department = String(val ?? '');
+        else if (col === 'password_hash') password_hash = String(val ?? '');
+        else if (col === 'role') role = String(val ?? 'user');
+      });
+    } else {
+      [name, email, password_hash, role] = params.map((p) => String(p ?? ''));
+    }
+
+    const newUser: LocalDBUser = {
       id: nextId,
-      name: String(name),
-      email: String(email),
-      password_hash: String(password_hash),
-      role: String(role || 'user'),
-    });
+      name,
+      email,
+      phone,
+      student_number,
+      department,
+      password_hash,
+      role: role || 'user',
+      created_at: new Date().toISOString(),
+    };
+
+    db.users.push(newUser);
     saveLocalDB(db);
     return [{ insertId: nextId, affectedRows: 1 }, []];
   }
@@ -259,6 +317,9 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
         user_id: r.user_id,
         user_name: u?.name || '',
         user_email: u?.email || '',
+        user_phone: u?.phone || '',
+        user_student_number: u?.student_number || '',
+        user_department: u?.department || '',
         screening_id: r.screening_id,
         movie_title: s?.movie_title || '',
         screening_date: s?.screening_date || '',
@@ -285,6 +346,14 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
           affected++;
         }
       });
+    } else if (upperSql.includes('WHERE ID = ?')) {
+      const id = Number(params[0]);
+      db.reservations.forEach((r) => {
+        if (r.id === id && r.status === 'active') {
+          r.status = 'cancelled';
+          affected++;
+        }
+      });
     } else if (upperSql.includes('WHERE SCREENING_ID = ? AND USER_ID = ?')) {
       const [screeningId, userId] = params.map(Number);
       db.reservations.forEach((r) => {
@@ -304,6 +373,14 @@ function executeLocalQuery(sql: string, params: unknown[] = []): [unknown, unkno
     }
     if (affected > 0) saveLocalDB(db);
     return [{ affectedRows: affected }, []];
+  }
+
+  // RESERVATIONS: DELETE ALL (Reset)
+  if (upperSql.startsWith('DELETE FROM RESERVATIONS')) {
+    const count = db.reservations.length;
+    db.reservations = [];
+    saveLocalDB(db);
+    return [{ affectedRows: count }, []];
   }
 
   return [[], []];
@@ -354,7 +431,7 @@ export default pool;
 
 /**
  * DATABASE.md'de belirtildiği gibi screenings tablosunda cover_image (LONGBLOB) sütununun
- * bulunduğundan emin olur. Eğer eski SQL dosyasından kalan cover_image_url varsa onu cover_image LONGBLOB'a dönüştürür.
+ * bulunduğundan emin olur.
  */
 export async function ensureCoverImageBlobColumn(): Promise<void> {
   try {
@@ -374,7 +451,33 @@ export async function ensureCoverImageBlobColumn(): Promise<void> {
 }
 
 /**
- * Binary BLOB verisinin MIME türünü (image/png, image/jpeg, image/webp, image/gif) tespit eder.
+ * DATABASE.md'de belirtildiği gibi users tablosunda phone, student_number, department sütunlarının
+ * bulunduğundan emin olur. Eksikse otomatik olarak ekler.
+ */
+export async function ensureUserColumns(): Promise<void> {
+  try {
+    const [rows] = await pool.query<mysql.RowDataPacket[]>('SHOW COLUMNS FROM users');
+    const cols = new Set(rows.map((r) => r.Field as string));
+
+    if (!cols.has('phone')) {
+      await pool.query('ALTER TABLE users ADD COLUMN phone VARCHAR(20) DEFAULT NULL AFTER email');
+    }
+    if (!cols.has('student_number')) {
+      await pool.query('ALTER TABLE users ADD COLUMN student_number VARCHAR(50) DEFAULT NULL AFTER phone');
+    }
+    if (!cols.has('department')) {
+      await pool.query('ALTER TABLE users ADD COLUMN department VARCHAR(100) DEFAULT NULL AFTER student_number');
+    }
+    if (!cols.has('created_at')) {
+      await pool.query('ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP');
+    }
+  } catch {
+    // Yetki veya tablo hatası varsa yoksay
+  }
+}
+
+/**
+ * Binary BLOB verisinin MIME türünü tespit eder.
  */
 export function detectImageMimeType(buf: Buffer): string {
   if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
