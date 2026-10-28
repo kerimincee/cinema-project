@@ -9,6 +9,9 @@ export interface AuthUser {
   id: number;
   name: string;
   email: string;
+  phone?: string;
+  student_number?: string;
+  department?: string;
   role: 'user' | 'admin';
 }
 
@@ -22,6 +25,9 @@ export function signToken(user: AuthUser): string {
       id: user.id,
       name: user.name,
       email: user.email,
+      phone: user.phone || '',
+      student_number: user.student_number || '',
+      department: user.department || '',
       role: user.role,
       exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7, // 7 gün geçerli
     })
@@ -66,6 +72,9 @@ export function verifyToken(token: string): AuthUser | null {
       id: Number(decoded.id),
       name: decoded.name,
       email: decoded.email,
+      phone: decoded.phone || '',
+      student_number: decoded.student_number || '',
+      department: decoded.department || '',
       role: decoded.role,
     };
   } catch {
@@ -76,7 +85,6 @@ export function verifyToken(token: string): AuthUser | null {
 /**
  * İstekten (Authorization Header veya HttpOnly Cookie) kullanıcıyı tespit eder
  * ve veritabanından güncel yetkisini (user / admin) doğrular.
- * Güvenlik nedeniyle gövde (body) veya özel başlıklardan (x-user-id) yetkilendirme KESİNLİKLE kabul edilmez.
  */
 export async function getAuthenticatedUser(req: NextRequest): Promise<AuthUser | null> {
   let userId: number | null = null;
@@ -104,9 +112,9 @@ export async function getAuthenticatedUser(req: NextRequest): Promise<AuthUser |
 
   if (!userId) return null;
 
-  // Kullanıcının varlığını ve güncel rolünü (user / admin) veritabanından doğrula
+  // Kullanıcının varlığını ve güncel rolünü veritabanından doğrula
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    'SELECT id, name, email, role FROM users WHERE id = ? LIMIT 1',
+    'SELECT id, name, email, phone, student_number, department, role FROM users WHERE id = ? LIMIT 1',
     [userId]
   );
 
@@ -117,6 +125,9 @@ export async function getAuthenticatedUser(req: NextRequest): Promise<AuthUser |
     id: Number(userRow.id),
     name: String(userRow.name),
     email: String(userRow.email),
+    phone: userRow.phone ? String(userRow.phone) : '',
+    student_number: userRow.student_number ? String(userRow.student_number) : '',
+    department: userRow.department ? String(userRow.department) : '',
     role: userRow.role === 'admin' ? 'admin' : 'user',
   };
 }

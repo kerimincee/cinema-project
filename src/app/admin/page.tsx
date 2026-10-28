@@ -16,6 +16,22 @@ type Screening = {
   remaining_capacity: number;
 };
 
+type AdminReservation = {
+  id: number;
+  user_id: number;
+  user_name: string;
+  user_email: string;
+  user_phone: string;
+  user_student_number: string;
+  user_department: string;
+  screening_id: number;
+  movie_title: string;
+  screening_date: string;
+  screening_time: string;
+  status: "active" | "cancelled";
+  created_at: string;
+};
+
 const emptyScreening: Screening = {
   movie_title: "",
   description: "",
@@ -38,6 +54,28 @@ export default function AdminPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  // Rezervasyon Yönetim State'leri
+  const [reservations, setReservations] = useState<AdminReservation[]>([]);
+  const [loadingReservations, setLoadingReservations] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "cancelled">("all");
+  const [resActionMessage, setResActionMessage] = useState("");
+
+  async function fetchReservations() {
+    setLoadingReservations(true);
+    try {
+      const res = await fetch("/api/reservations?all=true", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setReservations(data.reservations || []);
+      }
+    } catch {
+      // ignore error
+    } finally {
+      setLoadingReservations(false);
+    }
+  }
+
   useEffect(() => {
     async function initialize() {
       try {
@@ -57,12 +95,12 @@ export default function AdminPage() {
 
         setAuthorized(true);
 
+        // Film bilgilerini getir
         const response = await fetch("/api/screening", {
           cache: "no-store",
         });
 
         if (response.status === 404) {
-          // Henüz film yok. Admin paneli boş formla açılabilir.
           setFilm(emptyScreening);
           setPreview("");
         } else if (!response.ok) {
@@ -87,6 +125,9 @@ export default function AdminPage() {
             setPreview(data.cover_image ?? "");
           }
         }
+
+        // Tüm rezervasyonları getir
+        void fetchReservations();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Bir hata oluştu.");
       } finally {
@@ -131,25 +172,18 @@ export default function AdminPage() {
     setError("");
 
     try {
-      if (!film.movie_title.trim()) {
-        throw new Error("Lütfen film adını girin.");
-      }
-      if (!film.description.trim()) {
-        throw new Error("Lütfen film açıklamasını girin.");
-      }
-      if (!film.trailer_url.trim()) {
-        throw new Error("Lütfen fragman bağlantısını girin.");
-      }
-      if (!film.screening_date) {
-        throw new Error("Lütfen gösterim tarihini seçin.");
-      }
-      if (!film.screening_time) {
-        throw new Error("Lütfen gösterim saatini seçin.");
+      if (
+        !film.movie_title.trim() ||
+        !film.description.trim() ||
+        !film.trailer_url.trim() ||
+        !film.screening_date ||
+        !film.screening_time
+      ) {
+        throw new Error("Lütfen tüm zorunlu alanları doldurun.");
       }
 
-      // Eğer sistemde daha önceden yüklenmiş afiş yoksa yeni dosya zorunludur
-      if (!film.cover_image && !coverFile) {
-        throw new Error("İlk filmi eklemek için lütfen bir film afişi seçin.");
+      if (film.total_capacity < 1) {
+        throw new Error("Toplam kapasite en az 1 olmalıdır.");
       }
 
       if (film.total_capacity < film.active_reservations) {
@@ -171,7 +205,7 @@ export default function AdminPage() {
       }
 
       const response = await fetch("/api/admin/screening", {
-        method: "PATCH",
+        method: "POST",
         body: formData,
       });
 
@@ -181,14 +215,16 @@ export default function AdminPage() {
         throw new Error(result.error ?? "Kaydetme işlemi başarısız.");
       }
 
-      // Güncel verileri çek
-      const refreshed = await fetch("/api/screening", {
+      setMessage("Film bilgileri ve afiş başarıyla güncellendi.");
+      setCoverFile(null);
+
+      const refreshResponse = await fetch("/api/screening", {
         cache: "no-store",
       });
 
-      if (refreshed.ok) {
-        const refreshedResult = await refreshed.json();
-        const data = refreshedResult.screening ?? refreshedResult;
+      if (refreshResponse.ok) {
+        const refreshData = await refreshResponse.json();
+        const data = refreshData.screening ?? refreshData;
 
         setFilm({
           movie_title: data.movie_title ?? "",
@@ -204,15 +240,120 @@ export default function AdminPage() {
 
         setPreview(data.cover_image ?? "");
       }
-
-      setCoverFile(null);
-      setMessage("Film ve gösterim bilgileri başarıyla kaydedildi.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bir hata oluştu.");
     } finally {
       setSaving(false);
     }
   }
+
+  async function handleCancelReservation(reservationId: number, userName: string) {
+    if (!confirm(`"${userName}" adlı öğrencinin rezervasyonunu iptal etmek istediğinize emin misiniz?`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/reservations?id=${reservationId}`, {
+        method: "DELETE",
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(data.error || "Rezervasyon iptal edilemedi.");
+        return;
+      }
+
+      setResActionMessage(`Rezervasyon #${reservationId} başarıyla iptal edildi.`);
+      setTimeout(() => setResActionMessage(""), 4000);
+
+      // Rezervasyon listesini yenile
+      await fetchReservations();
+
+      // Film sayacını güncelle
+      const filmRes = await fetch("/api/screening", { cache: "no-store" });
+      if (filmRes.ok) {
+        const filmData = await filmRes.json();
+        const currentFilm = filmData.screening ?? filmData;
+        setFilm((prev) => ({
+          ...prev,
+          active_reservations: Number(currentFilm.active_reservations ?? 0),
+          remaining_capacity: Number(currentFilm.remaining_capacity ?? 0),
+        }));
+      }
+    } catch {
+      alert("Rezervasyon iptal edilirken bir hata oluştu.");
+    }
+  }
+
+  function exportToCSV() {
+    if (filteredReservations.length === 0) {
+      alert("Dışa aktarılacak kayıt bulunmuyor.");
+      return;
+    }
+
+    const headers = [
+      "ID",
+      "Öğrenci Adı Soyadı",
+      "Öğrenci No",
+      "Bölüm",
+      "Telefon",
+      "E-posta",
+      "Film",
+      "Gösterim Tarihi",
+      "Durum",
+      "Kayıt Tarihi",
+    ];
+
+    const rows = filteredReservations.map((r) => [
+      r.id,
+      `"${(r.user_name || "").replace(/"/g, '""')}"`,
+      `"${(r.user_student_number || "").replace(/"/g, '""')}"`,
+      `"${(r.user_department || "").replace(/"/g, '""')}"`,
+      `"${(r.user_phone || "").replace(/"/g, '""')}"`,
+      `"${(r.user_email || "").replace(/"/g, '""')}"`,
+      `"${(r.movie_title || "").replace(/"/g, '""')}"`,
+      `"${r.screening_date || ""} ${r.screening_time || ""}"`,
+      r.status === "active" ? "Aktif" : "İptal Edildi",
+      `"${(r.created_at || "").slice(0, 19)}"`,
+    ]);
+
+    const csvContent =
+      "\uFEFF" +
+      [headers.join(";"), ...rows.map((row) => row.join(";"))].join("\r\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute(
+      "download",
+      `sinema_rezervasyon_listesi_${new Date().toISOString().slice(0, 10)}.csv`
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  // Filtreleme ve arama mantığı
+  const filteredReservations = reservations.filter((r) => {
+    if (statusFilter !== "all" && r.status !== statusFilter) {
+      return false;
+    }
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return (
+      (r.user_name && r.user_name.toLowerCase().includes(q)) ||
+      (r.user_email && r.user_email.toLowerCase().includes(q)) ||
+      (r.user_phone && r.user_phone.toLowerCase().includes(q)) ||
+      (r.user_student_number && r.user_student_number.toLowerCase().includes(q)) ||
+      (r.user_department && r.user_department.toLowerCase().includes(q)) ||
+      (r.movie_title && r.movie_title.toLowerCase().includes(q))
+    );
+  });
+
+  const totalActiveResCount = reservations.filter((r) => r.status === "active").length;
+  const totalCancelledResCount = reservations.filter((r) => r.status === "cancelled").length;
 
   if (loading) {
     return (
@@ -225,16 +366,17 @@ export default function AdminPage() {
   if (!authorized) {
     return (
       <main className="cinema-admin">
-        <div className="admin-container" style={{ textAlign: "center", paddingTop: "80px" }}>
-          <div className="admin-card" style={{ maxWidth: "500px", margin: "0 auto", padding: "40px" }}>
-            <h2 style={{ color: "#f87171", marginBottom: "16px" }}>🔒 Yetkisiz Erişim</h2>
-            <p className="admin-muted" style={{ marginBottom: "24px" }}>
-              {error || "Bu sayfaya yalnızca admin yetkisine sahip kullanıcılar erişebilir."}
-            </p>
+        <div className="admin-container">
+          <header className="admin-header">
+            <div>
+              <p className="admin-eyebrow">YETKİSİZ ERİŞİM</p>
+              <h1>Admin Paneline Giriş Yapılamadı</h1>
+              <p className="admin-muted">{error}</p>
+            </div>
             <Link href="/" className="admin-back">
-              ← Ana Sayfaya Dön
+              ← Siteye Dön
             </Link>
-          </div>
+          </header>
         </div>
       </main>
     );
@@ -243,25 +385,30 @@ export default function AdminPage() {
   return (
     <main className="cinema-admin">
       <div className="admin-container">
+        
+        {/* Üst Başlık */}
         <header className="admin-header">
           <div>
             <p className="admin-eyebrow">SİNEMA YÖNETİM SİSTEMİ</p>
             <h1>Yönetim Paneli</h1>
             <p className="admin-muted">
-              Film gösterimini, afişini ve salon kapasitesini yönetin.
+              Film gösterimini, afişini, salon kapasitesini ve rezervasyonları yönetin.
             </p>
           </div>
 
-          <Link href="/" className="admin-back">
-            ← Siteye Dön
-          </Link>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <Link href="/" className="admin-back">
+              ← Siteye Dön
+            </Link>
+          </div>
         </header>
 
+        {/* İstatistik Kartları */}
         <section className="admin-stats">
           <div className="admin-stat">
-            <span>Toplam Kapasite</span>
+            <span>Toplam Salon Kapasitesi</span>
             <strong>{film.total_capacity}</strong>
-            <small>kişilik salon</small>
+            <small>koltuk kontenjanı</small>
           </div>
 
           <div className="admin-stat">
@@ -277,6 +424,7 @@ export default function AdminPage() {
           </div>
         </section>
 
+        {/* Film Düzenleme ve Canlı Önizleme */}
         <div className="admin-content">
           <section className="admin-card">
             <div className="admin-section-title">
@@ -430,6 +578,216 @@ export default function AdminPage() {
             </div>
           </aside>
         </div>
+
+        {/* REZERVASYON LİSTESİ BÖLÜMÜ */}
+        <section className="admin-card admin-reservations-card">
+          <div className="admin-section-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px", marginBottom: "20px" }}>
+            <div>
+              <h2>🎟️ Rezervasyon Listesi</h2>
+              <p>Film gösterimine yer ayırtan öğrencilerin güncel listesi ve iletişim bilgileri.</p>
+            </div>
+            <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+              <button
+                type="button"
+                onClick={fetchReservations}
+                disabled={loadingReservations}
+                className="admin-btn-secondary"
+                title="Listeyi sunucudan tekrar çek"
+              >
+                🔄 {loadingReservations ? "Yenileniyor..." : "Yenile"}
+              </button>
+
+              <button
+                type="button"
+                onClick={exportToCSV}
+                className="admin-btn-secondary"
+                title="Tablodaki kayıtları Excel / CSV formatında indir"
+              >
+                📥 Excel / CSV İndir
+              </button>
+            </div>
+          </div>
+
+          {resActionMessage && (
+            <div className="admin-success" style={{ marginBottom: "16px" }} role="status">
+              ✓ {resActionMessage}
+            </div>
+          )}
+
+          {/* Filtre ve Arama Çubuğu */}
+          <div className="admin-table-controls">
+            <div className="admin-search-box">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Öğrenci adı, e-posta, tel no, öğrenci no veya bölüm ara..."
+                className="admin-search-input"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  style={{ background: "transparent", border: "none", color: "#94a3b8", cursor: "pointer", padding: "4px 8px" }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <div className="admin-filter-pills">
+              <button
+                type="button"
+                onClick={() => setStatusFilter("all")}
+                className={`admin-filter-pill ${statusFilter === "all" ? "active" : ""}`}
+              >
+                Tümü ({reservations.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatusFilter("active")}
+                className={`admin-filter-pill ${statusFilter === "active" ? "active" : ""}`}
+              >
+                Aktifler ({totalActiveResCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatusFilter("cancelled")}
+                className={`admin-filter-pill ${statusFilter === "cancelled" ? "active" : ""}`}
+              >
+                İptal Edilenler ({totalCancelledResCount})
+              </button>
+            </div>
+          </div>
+
+          {/* Tablo Alanı */}
+          <div className="admin-table-wrapper">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th style={{ width: "60px" }}># ID</th>
+                  <th>Öğrenci Adı Soyadı</th>
+                  <th>Öğrenci No</th>
+                  <th>Bölüm</th>
+                  <th>Telefon</th>
+                  <th>E-posta</th>
+                  <th>Film / Seans</th>
+                  <th>Kayıt Tarihi</th>
+                  <th>Durum</th>
+                  <th style={{ textAlign: "right" }}>İşlem</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredReservations.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="admin-table-empty">
+                      {searchQuery || statusFilter !== "all"
+                        ? "Arama kriterlerine uygun rezervasyon kaydı bulunamadı."
+                        : "Henüz hiçbir rezervasyon yapılmamış."}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredReservations.map((res) => (
+                    <tr key={res.id}>
+                      <td style={{ fontWeight: "bold", color: "#94a3b8" }}>
+                        #{res.id}
+                      </td>
+
+                      <td style={{ fontWeight: "600", color: "#ffffff" }}>
+                        {res.user_name || "İsimsiz Kullanıcı"}
+                      </td>
+
+                      <td>
+                        {res.user_student_number ? (
+                          <span className="badge-student-no">
+                            {res.user_student_number}
+                          </span>
+                        ) : (
+                          <span style={{ color: "#64748b" }}>-</span>
+                        )}
+                      </td>
+
+                      <td style={{ color: "#cbd5e1" }}>
+                        {res.user_department || <span style={{ color: "#64748b" }}>-</span>}
+                      </td>
+
+                      <td>
+                        {res.user_phone ? (
+                          <a
+                            href={`tel:${res.user_phone}`}
+                            style={{ color: "#60a5fa", textDecoration: "none" }}
+                            title="Aramak için tıkla"
+                          >
+                            {res.user_phone}
+                          </a>
+                        ) : (
+                          <span style={{ color: "#64748b" }}>-</span>
+                        )}
+                      </td>
+
+                      <td style={{ color: "#94a3b8" }}>
+                        <a
+                          href={`mailto:${res.user_email}`}
+                          style={{ color: "#94a3b8", textDecoration: "none" }}
+                        >
+                          {res.user_email}
+                        </a>
+                      </td>
+
+                      <td>
+                        <strong style={{ display: "block", color: "#f8fafc" }}>
+                          {res.movie_title}
+                        </strong>
+                        <small style={{ color: "#94a3b8" }}>
+                          {res.screening_date} • {res.screening_time?.slice(0, 5)}
+                        </small>
+                      </td>
+
+                      <td style={{ color: "#94a3b8", whiteSpace: "nowrap" }}>
+                        {res.created_at ? res.created_at.slice(0, 16).replace("T", " ") : "-"}
+                      </td>
+
+                      <td>
+                        {res.status === "active" ? (
+                          <span className="badge-active">
+                            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#34d399", display: "inline-block" }}></span>
+                            Aktif
+                          </span>
+                        ) : (
+                          <span className="badge-cancelled">
+                            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#f87171", display: "inline-block" }}></span>
+                            İptal Edildi
+                          </span>
+                        )}
+                      </td>
+
+                      <td style={{ textAlign: "right" }}>
+                        {res.status === "active" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleCancelReservation(res.id, res.user_name)}
+                            className="btn-cancel-reservation"
+                            title="Rezervasyonu iptal et"
+                          >
+                            İptal Et
+                          </button>
+                        ) : (
+                          <span style={{ color: "#64748b", fontSize: "12px" }}>-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ marginTop: "16px", display: "flex", justifyContent: "space-between", color: "#94a3b8", fontSize: "12px" }}>
+            <span>Toplam {filteredReservations.length} kayıt listeleniyor</span>
+            <span>Öğrenci kapı kontrolü için listeyi Excel/CSV olarak indirebilirsiniz.</span>
+          </div>
+        </section>
+
       </div>
     </main>
   );

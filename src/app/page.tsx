@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 type Screening = {
@@ -22,18 +22,23 @@ type ScreeningResponse = Screening & {
   screening?: Screening;
 };
 
+type CurrentUser = {
+  id: number;
+  name: string;
+  email: string;
+  phone?: string;
+  student_number?: string;
+  department?: string;
+  role: string;
+};
+
 export default function Home() {
   const [screening, setScreening] = useState<Screening | null>(null);
   const [reserved, setReserved] = useState(false);
   const [apiMessage, setApiMessage] = useState("");
-  const [authOpen, setAuthOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authName, setAuthName] = useState("");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authMessage, setAuthMessage] = useState("");
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   const youtubeId =
     screening?.trailer_url.match(
@@ -78,51 +83,21 @@ export default function Home() {
           const data = await response.json();
           setIsLoggedIn(true);
           setIsAdmin(data.user?.role === "admin");
+          setCurrentUser(data.user ?? null);
         } else {
           setIsLoggedIn(false);
           setIsAdmin(false);
+          setCurrentUser(null);
         }
       } catch {
         setIsLoggedIn(false);
         setIsAdmin(false);
+        setCurrentUser(null);
       }
     }
 
     void checkLogin();
   }, []);
-
-  async function submitAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setAuthMessage("");
-
-    const endpoint =
-      authMode === "register" ? "/api/auth/register" : "/api/auth/login";
-
-    const body =
-      authMode === "register"
-        ? { name: authName, email: authEmail, password: authPassword }
-        : { email: authEmail, password: authPassword };
-
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        setAuthMessage(result.error ?? "İşlem tamamlanamadı.");
-        return;
-      }
-
-      setAuthOpen(false);
-      window.location.reload();
-    } catch {
-      setAuthMessage("Sunucuya bağlanılamadı. Lütfen tekrar deneyin.");
-    }
-  }
 
   const isFull =
     screening?.is_full ||
@@ -173,30 +148,33 @@ export default function Home() {
             )}
 
             {isLoggedIn ? (
-              <button
-                type="button"
-                onClick={async () => {
-                  await fetch("/api/auth/logout", { method: "POST" });
-                  setIsLoggedIn(false);
-                  setIsAdmin(false);
-                  window.location.reload();
-                }}
-                className="rounded-full border border-white/25 px-5 py-2 text-sm transition hover:bg-white hover:text-black"
-              >
-                Çıkış yap
-              </button>
+              <div className="flex items-center gap-3">
+                {currentUser?.name && (
+                  <span className="text-xs text-white/80 hidden sm:inline-block bg-white/10 px-3 py-1.5 rounded-full border border-white/10">
+                    👤 {currentUser.name}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await fetch("/api/auth/logout", { method: "POST" });
+                    setIsLoggedIn(false);
+                    setIsAdmin(false);
+                    setCurrentUser(null);
+                    window.location.reload();
+                  }}
+                  className="rounded-full border border-white/25 px-5 py-2 text-sm transition hover:bg-white hover:text-black cursor-pointer"
+                >
+                  Çıkış yap
+                </button>
+              </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode("login");
-                  setAuthMessage("");
-                  setAuthOpen(true);
-                }}
+              <Link
+                href="/login"
                 className="rounded-full border border-white/25 px-5 py-2 text-sm transition hover:bg-white hover:text-black"
               >
                 Giriş yap / Kayıt ol
-              </button>
+              </Link>
             )}
           </div>
         </header>
@@ -220,12 +198,9 @@ export default function Home() {
                 .getElementById("fragman")
                 ?.scrollIntoView({ behavior: "smooth" })
             }
-            className="mt-8 inline-flex items-center gap-3 rounded-full border border-white/30 px-5 py-3 text-sm font-medium transition hover:border-orange-300 hover:bg-orange-300/10"
+            className="mt-8 rounded-full border border-white/30 px-6 py-3 text-sm font-medium transition hover:border-white hover:bg-white hover:text-black"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-400 text-black">
-              ▶
-            </span>
-            Fragmanı izle
+            Detaylar ve rezervasyon ↓
           </button>
         </div>
 
@@ -290,43 +265,20 @@ export default function Home() {
             Film hakkında
           </p>
 
-          <p className="leading-7 text-white/65">
-            {screening?.description ?? apiMessage}
-          </p>
+          <dl className="grid gap-4 text-sm">
+            <div>
+              <dt className="text-white/45">Tarih ve saat</dt>
+              <dd className="mt-1 text-base font-medium">
+                {screening?.screening_date ?? "-"} •{" "}
+                {screening?.screening_time?.slice(0, 5) ?? "-"}
+              </dd>
+            </div>
 
-          <dl className="mt-7 grid grid-cols-2 gap-5 rounded-xl border border-white/10 bg-white/[0.03] p-5">
             <div>
-              <dt className="text-xs uppercase tracking-wider text-white/40">
-                Tarih
-              </dt>
-              <dd className="mt-2 font-medium">
-                {screening?.screening_date ?? "Yükleniyor..."}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-white/40">
-                Saat
-              </dt>
-              <dd className="mt-2 font-medium">
-                {screening?.screening_time?.slice(0, 5) ?? "Yükleniyor..."}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-white/40">
-                Toplam Kontenjan
-              </dt>
-              <dd className="mt-2 font-medium">
-                {screening ? `${screening.total_capacity} Kişi` : "Yükleniyor..."}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wider text-white/40">
-                Kalan yer
-              </dt>
-              <dd className="mt-2 font-medium">
-                {screening
-                  ? `${screening.remaining_capacity} / ${screening.total_capacity}`
-                  : "Yükleniyor..."}
+              <dt className="text-white/45">Kalan kontenjan</dt>
+              <dd className="mt-1 text-base font-medium">
+                {screening?.remaining_capacity ?? "-"} /{" "}
+                {screening?.total_capacity ?? "-"} koltuk
               </dd>
             </div>
           </dl>
@@ -334,6 +286,11 @@ export default function Home() {
           <button
             disabled={isButtonDisabled}
             onClick={async () => {
+              if (!isLoggedIn) {
+                window.location.href = "/login?redirect=/";
+                return;
+              }
+
               if (!screening) return;
 
               const cancelling = reserved;
@@ -350,9 +307,7 @@ export default function Home() {
 
                 if (!response.ok) {
                   if (response.status === 401) {
-                    setAuthMode("login");
-                    setAuthMessage(result.error ?? "Lütfen önce giriş yapın.");
-                    setAuthOpen(true);
+                    window.location.href = "/login?redirect=/";
                     return;
                   }
 
@@ -400,10 +355,10 @@ export default function Home() {
             }}
             className={`mt-6 w-full rounded-xl px-6 py-4 font-semibold transition ${
               reserved
-                ? "bg-emerald-700 text-white hover:bg-emerald-600"
+                ? "bg-emerald-700 text-white hover:bg-emerald-600 cursor-pointer"
                 : isButtonDisabled
                 ? "cursor-not-allowed bg-zinc-700 text-zinc-400"
-                : "bg-orange-400 text-black hover:bg-orange-300"
+                : "bg-orange-400 text-black hover:bg-orange-300 cursor-pointer"
             }`}
           >
             {reserved
@@ -428,96 +383,6 @@ export default function Home() {
           Yukarı dön ↑
         </a>
       </footer>
-
-      {authOpen && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
-          onClick={() => setAuthOpen(false)}
-        >
-          <form
-            onSubmit={submitAuth}
-            onClick={(event) => event.stopPropagation()}
-            className="w-full max-w-md rounded-2xl bg-[#11141d] p-6 text-white shadow-xl"
-          >
-            <div className="mb-6 flex items-center justify-between">
-              <h2 className="text-2xl font-semibold">
-                {authMode === "register" ? "Hesap oluştur" : "Giriş yap"}
-              </h2>
-              <button
-                type="button"
-                onClick={() => setAuthOpen(false)}
-                className="rounded-full border border-white/20 px-3 py-1"
-                aria-label="Pencereyi kapat"
-              >
-                ✕
-              </button>
-            </div>
-
-            {authMode === "register" && (
-              <label className="mb-4 block text-sm">
-                Ad soyad
-                <input
-                  required
-                  value={authName}
-                  onChange={(event) => setAuthName(event.target.value)}
-                  className="mt-2 w-full rounded-lg border border-white/20 bg-black/30 p-3"
-                  placeholder="Adınız Soyadınız"
-                />
-              </label>
-            )}
-
-            <label className="mb-4 block text-sm">
-              E-posta
-              <input
-                required
-                type="email"
-                value={authEmail}
-                onChange={(event) => setAuthEmail(event.target.value)}
-                className="mt-2 w-full rounded-lg border border-white/20 bg-black/30 p-3"
-                placeholder="ornek@mail.com"
-              />
-            </label>
-
-            <label className="mb-4 block text-sm">
-              Parola
-              <input
-                required
-                minLength={6}
-                maxLength={72}
-                type="password"
-                value={authPassword}
-                onChange={(event) => setAuthPassword(event.target.value)}
-                className="mt-2 w-full rounded-lg border border-white/20 bg-black/30 p-3"
-                placeholder="En az 6 karakter"
-              />
-            </label>
-
-            {authMessage && (
-              <p className="mb-4 text-sm text-orange-300">{authMessage}</p>
-            )}
-
-            <button
-              type="submit"
-              className="w-full rounded-lg bg-orange-400 p-3 font-semibold text-black hover:bg-orange-300"
-            >
-              {authMode === "register" ? "Kayıt ol" : "Giriş yap"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setAuthMode(authMode === "register" ? "login" : "register");
-                setAuthMessage("");
-              }}
-              className="mt-4 w-full text-sm text-white/70 hover:text-white"
-            >
-              {authMode === "register"
-                ? "Zaten hesabım var — giriş yap"
-                : "Hesabın yok mu? Kayıt ol"}
-            </button>
-          </form>
-        </div>
-      )}
     </main>
   );
 }
